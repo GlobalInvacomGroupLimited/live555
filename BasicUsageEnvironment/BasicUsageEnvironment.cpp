@@ -17,7 +17,6 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 // Basic Usage Environment: for a simple, non-scripted, console application
 // Implementation
 
-#ifndef IMN_PIM
 #include "BasicUsageEnvironment.hh"
 #include <stdio.h>
 
@@ -47,14 +46,7 @@ BasicUsageEnvironment::createNew(TaskScheduler& taskScheduler) {
 }
 
 int BasicUsageEnvironment::getErrno() const {
-#if defined(__WIN32__) || defined(_WIN32)
-#ifndef _WIN32_WCE
-  if (errno == 0) {
-    errno = WSAGetLastError();
-  }
-#endif
-#endif
-#if defined(_WIN32_WCE)
+#if defined(__WIN32__) || defined(_WIN32) || defined(_WIN32_WCE)
   return WSAGetLastError();
 #else
   return errno;
@@ -85,5 +77,3 @@ UsageEnvironment& BasicUsageEnvironment::operator<<(void* p) {
 	fprintf(stderr, "%p", p);
 	return *this;
 }
-#endif
-
