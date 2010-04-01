@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // Usage Environment
 // C++ header
 
@@ -128,6 +128,8 @@ public:
 				BackgroundHandlerProc* handlerProc,
 				void* clientData) = 0;
   virtual void turnOffBackgroundReadHandling(int socketNum) = 0;
+  virtual void moveSocketHandling(int oldSocketNum, int newSocketNum) = 0;
+        // Changes any socket handling for "oldSocketNum" so that occurs with "newSocketNum" instead.
 
   virtual void doEventLoop(char* watchVariable = NULL) = 0;
 	// Stops the current thread of control from proceeding,

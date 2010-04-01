@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // RTP sink for a common kind of payload format: Those which pack multiple,
 // complete codec frames (as many as possible) into each RTP packet.
 // Implementation
@@ -283,8 +283,7 @@ void MultiFramedRTPSink
         numFrameBytesToUse = 0;
       }
       fOutBuf->setOverflowData(fOutBuf->curPacketSize() + numFrameBytesToUse,
-          overflowBytes, presentationTime,
-          durationInMicroseconds);
+			       overflowBytes, presentationTime, durationInMicroseconds);
     } else if (fCurFragmentationOffset > 0) {
       // This is the last fragment of a frame that was fragmented over
       // more than one packet.  Do any special handling for this case:
@@ -298,7 +297,7 @@ void MultiFramedRTPSink
     sendPacketIfNecessary();
   } else {
     // Use this frame in our outgoing packet:
-    unsigned char * frameStart = fOutBuf->curPtr();
+    unsigned char* frameStart = fOutBuf->curPtr();
     fOutBuf->increment(numFrameBytesToUse);
         // do this now, in case "doSpecialFrameHandling()" calls "setFramePadding()" to append padding bytes
 

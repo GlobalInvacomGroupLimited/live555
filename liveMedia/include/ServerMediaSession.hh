@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // A data structure that represents a session that consists of
 // potentially multiple (audio and/or video) sub-sessions
 // (This data structure is used for media *streamers* - i.e., servers.
@@ -29,6 +29,9 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #endif
 #ifndef _GROUPEID_HH
 #include "GroupEId.hh"
+#endif
+#ifndef _RTP_INTERFACE_HH
+#include "RTPInterface.hh" // for ServerRequestAlternativeByteHandler
 #endif
 
 class ServerMediaSubsession; // forward
@@ -133,7 +136,9 @@ public:
 			   TaskFunc* rtcpRRHandler,
 			   void* rtcpRRHandlerClientData,
 			   unsigned short& rtpSeqNum,
-			   unsigned& rtpTimestamp) = 0;
+			   unsigned& rtpTimestamp,
+			   ServerRequestAlternativeByteHandler* serverRequestAlternativeByteHandler,
+			   void* serverRequestAlternativeByteHandlerClientData) = 0;
   virtual void pauseStream(unsigned clientSessionId, void* streamToken);
   virtual void seekStream(unsigned clientSessionId, void* streamToken, double seekNPT);
   virtual void setStreamScale(unsigned clientSessionId, void* streamToken, float scale);

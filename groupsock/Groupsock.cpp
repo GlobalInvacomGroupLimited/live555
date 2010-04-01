@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // 'Group sockets'
 // Implementation
 
@@ -22,16 +22,8 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 //##### Eventually fix the following #include; we shouldn't know about tunnels
 #include "TunnelEncaps.hh"
 
-#ifndef NO_STRSTREAM
-#if (defined(__WIN32__) || defined(_WIN32)) && !defined(__MINGW32__)
-#include <strstrea.h>
-#else
-#if defined(__GNUC__) && (__GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ > 0)
-#include <strstream>
-#else
-#include <strstream.h>
-#endif
-#endif
+#ifndef NO_SSTREAM
+#include <sstream>
 #endif
 #include <stdio.h>
 

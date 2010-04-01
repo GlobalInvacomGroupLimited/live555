@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // A 'ServerMediaSubsession' object that creates new, unicast, "RTPSink"s
 // on demand.
 // Implementation
@@ -29,8 +29,7 @@ OnDemandServerMediaSubsession
 				Boolean reuseFirstSource,
 				portNumBits initialPortNum)
   : ServerMediaSubsession(env),
-    fReuseFirstSource(reuseFirstSource), fInitialPortNum(initialPortNum),
-    fLastStreamToken(NULL), fSDPLines(NULL) {
+    fSDPLines(NULL), fReuseFirstSource(reuseFirstSource), fInitialPortNum(initialPortNum), fLastStreamToken(NULL) {
   fDestinationsHashTable = HashTable::create(ONE_WORD_HASH_KEYS);
   gethostname(fCNAME, sizeof fCNAME);
   fCNAME[sizeof fCNAME-1] = '\0'; // just in case
@@ -77,7 +76,7 @@ OnDemandServerMediaSubsession::sdpLines() {
     // subsession (as a unicast stream).  To do so, we first create
     // dummy (unused) source and "RTPSink" objects,
     // whose parameters we use for the SDP lines:
-    unsigned estBitrate; // unused
+    unsigned estBitrate;
     FramedSource* inputSource = createNewStreamSource(0, estBitrate);
     if (inputSource == NULL) return NULL; // file not found
 
@@ -88,7 +87,7 @@ OnDemandServerMediaSubsession::sdpLines() {
     RTPSink* dummyRTPSink
       = createNewRTPSink(&dummyGroupsock, rtpPayloadType, inputSource);
 
-    setSDPLinesFromRTPSink(dummyRTPSink, inputSource);
+    setSDPLinesFromRTPSink(dummyRTPSink, inputSource, estBitrate);
     Medium::close(dummyRTPSink);
     closeStreamSource(inputSource);
   }
@@ -107,7 +106,9 @@ public:
   virtual ~StreamState();
 
   void startPlaying(Destinations* destinations,
-		    TaskFunc* rtcpRRHandler, void* rtcpRRHandlerClientData);
+		    TaskFunc* rtcpRRHandler, void* rtcpRRHandlerClientData,
+		    ServerRequestAlternativeByteHandler* serverRequestAlternativeByteHandler,
+                    void* serverRequestAlternativeByteHandlerClientData);
   void pause();
   void endPlaying(Destinations* destinations);
   void reclaim();
@@ -228,6 +229,14 @@ void OnDemandServerMediaSubsession
     if (rtpGroupsock != NULL) rtpGroupsock->removeAllDestinations();
     if (rtcpGroupsock != NULL) rtcpGroupsock->removeAllDestinations();
 
+    if (rtpGroupsock != NULL) {
+      // Try to use a big send buffer for RTP -  at least 0.1 second of
+      // specified bandwidth and at least 50 KB
+      unsigned rtpBufSize = streamBitrate * 25 / 2; // 1 kbps * 0.1 s = 12.5 bytes
+      if (rtpBufSize < 50 * 1024) rtpBufSize = 50 * 1024;
+      increaseSendBufferTo(envir(), rtpGroupsock->socketNum(), rtpBufSize);
+    }
+
     // Set up the state of the stream.  The stream will get started later:
     streamToken = fLastStreamToken
       = new StreamState(*this, serverRTPPort, serverRTCPPort, rtpSink, udpSink,
@@ -250,13 +259,16 @@ void OnDemandServerMediaSubsession::startStream(unsigned clientSessionId,
 						TaskFunc* rtcpRRHandler,
 						void* rtcpRRHandlerClientData,
 						unsigned short& rtpSeqNum,
-						unsigned& rtpTimestamp) {
+						unsigned& rtpTimestamp,
+						ServerRequestAlternativeByteHandler* serverRequestAlternativeByteHandler,
+						void* serverRequestAlternativeByteHandlerClientData) {
   StreamState* streamState = (StreamState*)streamToken;
   Destinations* destinations
     = (Destinations*)(fDestinationsHashTable->Lookup((char const*)clientSessionId));
   if (streamState != NULL) {
     streamState->startPlaying(destinations,
-			      rtcpRRHandler, rtcpRRHandlerClientData);
+			      rtcpRRHandler, rtcpRRHandlerClientData,
+			      serverRequestAlternativeByteHandler, serverRequestAlternativeByteHandlerClientData);
     if (streamState->rtpSink() != NULL) {
       rtpSeqNum = streamState->rtpSink()->currentSeqNo();
       rtpTimestamp = streamState->rtpSink()->presetNextTimestamp();
@@ -347,7 +359,7 @@ void OnDemandServerMediaSubsession::closeStreamSource(FramedSource *inputSource)
 }
 
 void OnDemandServerMediaSubsession
-::setSDPLinesFromRTPSink(RTPSink* rtpSink, FramedSource* inputSource) {
+::setSDPLinesFromRTPSink(RTPSink* rtpSink, FramedSource* inputSource, unsigned estBitrate) {
   if (rtpSink == NULL) return;
 
   char const* mediaType = rtpSink->sdpMediaType();
@@ -362,6 +374,7 @@ void OnDemandServerMediaSubsession
   char const* const sdpFmt =
     "m=%s %u RTP/AVP %d\r\n"
     "c=IN IP4 %s\r\n"
+    "b=AS:%u\r\n"
     "%s"
     "%s"
     "%s"
@@ -369,6 +382,7 @@ void OnDemandServerMediaSubsession
   unsigned sdpFmtSize = strlen(sdpFmt)
     + strlen(mediaType) + 5 /* max short len */ + 3 /* max char len */
     + strlen(ipAddressStr)
+    + 20 /* max int len */
     + strlen(rtpmapLine)
     + strlen(rangeLine)
     + strlen(auxSDPLine)
@@ -379,6 +393,7 @@ void OnDemandServerMediaSubsession
 	  fPortNumForSDP, // m= <port>
 	  rtpPayloadType, // m= <fmt list>
 	  ipAddressStr, // c= address
+	  estBitrate, // b=AS:<bandwidth>
 	  rtpmapLine, // a=rtpmap:... (if present)
 	  rangeLine, // a=range:... (if present)
 	  auxSDPLine, // optional extra SDP line
@@ -424,7 +439,9 @@ StreamState::~StreamState() {
 
 void StreamState
 ::startPlaying(Destinations* dests,
-	       TaskFunc* rtcpRRHandler, void* rtcpRRHandlerClientData) {
+	       TaskFunc* rtcpRRHandler, void* rtcpRRHandlerClientData,
+	       ServerRequestAlternativeByteHandler* serverRequestAlternativeByteHandler,
+	       void* serverRequestAlternativeByteHandlerClientData) {
   if (dests == NULL) return;
   if (!fAreCurrentlyPlaying && fMediaSource != NULL) {
     if (fRTPSink != NULL) {
@@ -449,6 +466,7 @@ void StreamState
     // Change RTP and RTCP to use the TCP socket instead of UDP:
     if (fRTPSink != NULL) {
       fRTPSink->addStreamSocket(dests->tcpSocketNum, dests->rtpChannelId);
+      fRTPSink->setServerRequestAlternativeByteHandler(serverRequestAlternativeByteHandler, serverRequestAlternativeByteHandlerClientData);
     }
     if (fRTCPInstance != NULL) {
       fRTCPInstance->addStreamSocket(dests->tcpSocketNum, dests->rtcpChannelId);

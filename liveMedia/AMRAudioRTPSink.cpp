@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // RTP sink for AMR audio (RFC 3267)
 // Implementation
 
@@ -41,11 +41,11 @@ AMRAudioRTPSink
 		 sourceIsWideband ? 16000 : 8000,
 		 sourceIsWideband ? "AMR-WB": "AMR",
 		 numChannelsInSource),
-  fSourceIsWideband(sourceIsWideband), fAuxSDPLine(NULL) {
+  fSourceIsWideband(sourceIsWideband), fFmtpSDPLine(NULL) {
 }
 
 AMRAudioRTPSink::~AMRAudioRTPSink() {
-  delete[] fAuxSDPLine;
+  delete[] fFmtpSDPLine;
 }
 
 Boolean AMRAudioRTPSink::sourceIsCompatibleWithUs(MediaSource& source) {
@@ -123,12 +123,12 @@ unsigned AMRAudioRTPSink::specialHeaderSize() const {
 }
 
 char const* AMRAudioRTPSink::auxSDPLine() {
-  if (fAuxSDPLine == NULL) {
+  if (fFmtpSDPLine == NULL) {
     // Generate a "a=fmtp:" line with "octet-aligned=1"
     // (That is the only non-default parameter.)
     char buf[100];
     sprintf(buf, "a=fmtp:%d octet-align=1\r\n", rtpPayloadType());
-    delete[] fAuxSDPLine; fAuxSDPLine = strDup(buf);
+    delete[] fFmtpSDPLine; fFmtpSDPLine = strDup(buf);
   }
-  return fAuxSDPLine;
+  return fFmtpSDPLine;
 }

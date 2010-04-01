@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // Basic Usage Environment: for a simple, non-scripted, console application
 // Implementation
 
@@ -115,11 +115,7 @@ void HandlerSet
 		TaskScheduler::BackgroundHandlerProc* handlerProc,
 		void* clientData) {
   // First, see if there's already a handler for this socket:
-  HandlerDescriptor* handler;
-  HandlerIterator iter(*this);
-  while ((handler = iter.next()) != NULL) {
-    if (handler->socketNum == socketNum) break;
-  }
+  HandlerDescriptor* handler = lookupHandler(socketNum);
   if (handler == NULL) { // No existing handler, so create a new descr:
     handler = new HandlerDescriptor(fHandlers.fNextHandler);
     handler->socketNum = socketNum;
@@ -130,14 +126,24 @@ void HandlerSet
 }
 
 void HandlerSet::removeHandler(int socketNum) {
+  HandlerDescriptor* handler = lookupHandler(socketNum);
+  delete handler;
+}
+
+void HandlerSet::moveHandler(int oldSocketNum, int newSocketNum) {
+  HandlerDescriptor* handler = lookupHandler(oldSocketNum);
+  if (handler != NULL) {
+    handler->socketNum = newSocketNum;
+  }
+}
+
+HandlerDescriptor* HandlerSet::lookupHandler(int socketNum) {
   HandlerDescriptor* handler;
   HandlerIterator iter(*this);
   while ((handler = iter.next()) != NULL) {
-    if (handler->socketNum == socketNum) {
-      delete handler;
-      break;
-    }
+    if (handler->socketNum == socketNum) break;
   }
+  return handler;
 }
 
 HandlerIterator::HandlerIterator(HandlerSet& handlerSet)

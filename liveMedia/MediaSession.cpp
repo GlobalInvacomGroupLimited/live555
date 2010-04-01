@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // A data structure that represents a session that consists of
 // potentially multiple (audio and/or video) sub-sessions
 // Implementation
@@ -211,6 +211,7 @@ Boolean MediaSession::initializeWithSDP(char const* sdpDescription) {
 
       // Check for various special SDP lines that we understand:
       if (subsession->parseSDPLine_c(sdpLine)) continue;
+      if (subsession->parseSDPLine_b(sdpLine)) continue;
       if (subsession->parseSDPAttribute_rtpmap(sdpLine)) continue;
       if (subsession->parseSDPAttribute_control(sdpLine)) continue;
       if (subsession->parseSDPAttribute_range(sdpLine)) continue;
@@ -286,7 +287,7 @@ Boolean MediaSession::parseSDPLine(char const* inputLine,
 static char* parseCLine(char const* sdpLine) {
   char* resultStr = NULL;
   char* buffer = strDupSize(sdpLine); // ensures we have enough space
-  if (sscanf(sdpLine, "c=IN IP4 %[^/ ]", buffer) == 1) {
+  if (sscanf(sdpLine, "c=IN IP4 %[^/\r\n]", buffer) == 1) {
     // Later, handle the optional /<ttl> and /<numAddresses> #####
     resultStr = strDup(buffer);
   }
@@ -462,7 +463,8 @@ char* MediaSession::lookupPayloadFormat(unsigned char rtpPayloadType,
 unsigned MediaSession::guessRTPTimestampFrequency(char const* mediumName,
 						  char const* codecName) {
   // By default, we assume that audio sessions use a frequency of 8000,
-  // and that video sessions use a frequency of 90000.
+  // video sessions use a frequency of 90000,
+  // and text sessions use a frequency of 1000.
   // Begin by checking for known exceptions to this rule
   // (where the frequency is known unambiguously (e.g., not like "DVI4"))
   if (strcmp(codecName, "L16") == 0) return 44100;
@@ -472,6 +474,7 @@ unsigned MediaSession::guessRTPTimestampFrequency(char const* mediumName,
 
   // Now, guess default values:
   if (strcmp(mediumName, "video") == 0) return 90000;
+  else if (strcmp(mediumName, "text") == 0) return 1000;
   return 8000; // for "audio", and any other medium
 }
 
@@ -540,7 +543,7 @@ MediaSubsession::MediaSubsession(MediaSession& parent)
     fClientPortNum(0), fRTPPayloadFormat(0xFF),
     fSavedSDPLines(NULL), fMediumName(NULL), fCodecName(NULL), fProtocolName(NULL),
     fRTPTimestampFrequency(0), fControlPath(NULL),
-    fSourceFilterAddr(parent.sourceFilterAddr()),
+    fSourceFilterAddr(parent.sourceFilterAddr()), fBandwidth(0),
     fAuxiliarydatasizelength(0), fConstantduration(0), fConstantsize(0),
     fCRC(0), fCtsdeltalength(0), fDe_interleavebuffersize(0), fDtsdeltalength(0),
     fIndexdeltalength(0), fIndexlength(0), fInterleaving(0), fMaxdisplacement(0),
@@ -632,6 +635,7 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
       HashTable* socketHashTable = HashTable::create(ONE_WORD_HASH_KEYS);
       if (socketHashTable == NULL) break;
       Boolean success = False;
+      NoReuse dummy; // ensures that our new ephemeral port number won't be one that's already in use
 
       while (1) {
 	// Create a new socket:
@@ -690,6 +694,13 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
       if (!success) break; // a fatal error occurred trying to create the RTP and RTCP sockets; we can't continue
     }
 
+    // Try to use a big receive buffer for RTP - at least 0.1 second of
+    // specified bandwidth and at least 50 KB
+    unsigned rtpBufSize = fBandwidth * 25 / 2; // 1 kbps * 0.1 s = 12.5 bytes
+    if (rtpBufSize < 50 * 1024)
+      rtpBufSize = 50 * 1024;
+    increaseReceiveBufferTo(env(), fRTPSocket->socketNum(), rtpBufSize);
+
     // ASSERT: fRTPSocket != NULL && fRTCPSocket != NULL
     if (isSSM()) {
       // Special case for RTCP SSM: Send RTCP packets back to the source via unicast:
@@ -711,8 +722,8 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
       // and create our RTP source accordingly
       // (Later make this code more efficient, as this set grows #####)
       // (Also, add more fmts that can be implemented by SimpleRTPSource#####)
-      Boolean createSimpleRTPSource = False;
-      Boolean doNormalMBitRule = False; // used if "createSimpleRTPSource"
+      Boolean createSimpleRTPSource = False; // by default; can be changed below
+      Boolean doNormalMBitRule = False; // default behavior if "createSimpleRTPSource" is True
       if (strcmp(fCodecName, "QCELP") == 0) { // QCELP audio
 	fReadSource =
 	  QCELPAudioRTPSource::createNew(env(), fRTPSocket, fRTPSource,
@@ -813,6 +824,11 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
 	  = H264VideoRTPSource::createNew(env(), fRTPSocket,
 					  fRTPPayloadFormat,
 					  fRTPTimestampFrequency);
+      } else if (strcmp(fCodecName, "DV") == 0) {
+	fReadSource = fRTPSource
+	  = DVVideoRTPSource::createNew(env(), fRTPSocket,
+					fRTPPayloadFormat,
+					fRTPTimestampFrequency);
       } else if (strcmp(fCodecName, "JPEG") == 0) { // motion JPEG
 	fReadSource = fRTPSource
 	  = JPEGVideoRTPSource::createNew(env(), fRTPSocket,
@@ -855,6 +871,7 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
 		   || strcmp(fCodecName, "G726-32") == 0 // G.726, 32 kbps
 		   || strcmp(fCodecName, "G726-40") == 0 // G.726, 40 kbps
 		   || strcmp(fCodecName, "SPEEX") == 0 // SPEEX audio
+		   || strcmp(fCodecName, "T140") == 0 // T.140 text (RFC 4103)
 		   ) {
 	createSimpleRTPSource = True;
 	useSpecialRTPoffset = 0;
@@ -887,7 +904,10 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
 
     // Finally, create our RTCP instance. (It starts running automatically)
     if (fRTPSource != NULL) {
-      unsigned totSessionBandwidth = 500; // HACK - later get from SDP#####
+      // If bandwidth is specified, use it and add 5% for RTCP overhead.
+      // Otherwise make a guess at 500 kbps.
+      unsigned totSessionBandwidth
+	= fBandwidth ? fBandwidth + fBandwidth / 20 : 500;
       fRTCPInstance = RTCPInstance::createNew(env(), fRTCPSocket,
 					      totSessionBandwidth,
 					      (unsigned char const*)
@@ -1021,6 +1041,12 @@ Boolean MediaSubsession::parseSDPLine_c(char const* sdpLine) {
   }
 
   return False;
+}
+
+Boolean MediaSubsession::parseSDPLine_b(char const* sdpLine) {
+  // Check for "b=<bwtype>:<bandwidth>" line
+  // RTP applications are expected to use bwtype="AS"
+  return sscanf(sdpLine, "b=AS:%u", &fBandwidth) == 1;
 }
 
 Boolean MediaSubsession::parseSDPAttribute_rtpmap(char const* sdpLine) {

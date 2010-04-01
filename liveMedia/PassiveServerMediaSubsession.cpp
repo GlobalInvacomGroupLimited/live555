@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // A 'ServerMediaSubsession' object that represents an existing
 // 'RTPSink', rather than one that creates new 'RTPSink's on demand.
 // Implementation
@@ -33,7 +33,7 @@ PassiveServerMediaSubsession::createNew(RTPSink& rtpSink,
 PassiveServerMediaSubsession
 ::PassiveServerMediaSubsession(RTPSink& rtpSink, RTCPInstance* rtcpInstance)
   : ServerMediaSubsession(rtpSink.envir()),
-    fRTPSink(rtpSink), fRTCPInstance(rtcpInstance), fSDPLines(NULL) {
+    fSDPLines(NULL), fRTPSink(rtpSink), fRTCPInstance(rtcpInstance) {
 }
 
 char const*
@@ -47,6 +47,8 @@ PassiveServerMediaSubsession::sdpLines() {
     unsigned char ttl = gs.ttl();
     unsigned char rtpPayloadType = fRTPSink.rtpPayloadType();
     char const* mediaType = fRTPSink.sdpMediaType();
+    unsigned estBitrate
+      = fRTCPInstance == NULL ? 50 : fRTCPInstance->totSessionBW();
     char* rtpmapLine = fRTPSink.rtpmapLine();
     char const* rangeLine = rangeSDPLine();
     char const* auxSDPLine = fRTPSink.auxSDPLine();
@@ -57,6 +59,7 @@ PassiveServerMediaSubsession::sdpLines() {
     char const* const sdpFmt =
       "m=%s %d RTP/AVP %d\r\n"
       "c=IN IP4 %s/%d\r\n"
+      "b=AS:%u\r\n"
       "%s"
       "%s"
       "%s"
@@ -64,6 +67,7 @@ PassiveServerMediaSubsession::sdpLines() {
     unsigned sdpFmtSize = strlen(sdpFmt)
       + strlen(mediaType) + 5 /* max short len */ + 3 /* max char len */
       + strlen(ipAddressStr) + 3 /* max char len */
+      + 20 /* max int len */
       + strlen(rtpmapLine)
       + strlen(rangeLine)
       + strlen(auxSDPLine)
@@ -75,6 +79,7 @@ PassiveServerMediaSubsession::sdpLines() {
 	    rtpPayloadType, // m= <fmt list>
 	    ipAddressStr, // c= <connection address>
 	    ttl, // c= TTL
+	    estBitrate, // b=AS:<bandwidth>
 	    rtpmapLine, // a=rtpmap:... (if present)
 	    rangeLine, // a=range:... (if present)
 	    auxSDPLine, // optional extra SDP line
@@ -128,12 +133,21 @@ void PassiveServerMediaSubsession::startStream(unsigned /*clientSessionId*/,
 					       TaskFunc* /*rtcpRRHandler*/,
 					       void* /*rtcpRRHandlerClientData*/,
 					       unsigned short& rtpSeqNum,
-					       unsigned& rtpTimestamp) {
+					       unsigned& rtpTimestamp,
+					       ServerRequestAlternativeByteHandler* /*serverRequestAlternativeByteHandler*/,
+					       void* /*serverRequestAlternativeByteHandlerClientData*/) {
   // Note: We don't set a RTCP RR handler, because (i) we're called potentially
   // many times on the same "RTCPInstance", and (ii) the "RTCPInstance" remains
   // in existence after "deleteStream()" is called.
   rtpSeqNum = fRTPSink.currentSeqNo();
   rtpTimestamp = fRTPSink.presetNextTimestamp();
+
+  // Try to use a big send buffer for RTP -  at least 0.1 second of
+  // specified bandwidth and at least 50 KB
+  unsigned streamBitrate = fRTCPInstance == NULL ? 50 : fRTCPInstance->totSessionBW(); // in kbps
+  unsigned rtpBufSize = streamBitrate * 25 / 2; // 1 kbps * 0.1 s = 12.5 bytes
+  if (rtpBufSize < 50 * 1024) rtpBufSize = 50 * 1024;
+  increaseSendBufferTo(envir(), fRTPSink.groupsockBeingUsed().socketNum(), rtpBufSize);
 }
 
 PassiveServerMediaSubsession::~PassiveServerMediaSubsession() {

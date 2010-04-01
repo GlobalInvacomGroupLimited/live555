@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // An abstraction of a network interface used for RTP (or RTCP).
 // (This allows the RTP-over-TCP hack (RFC 2326, section 10.12) to
 // be implemented transparently.)
@@ -34,6 +34,11 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 // when each new packet is read:
 typedef void AuxHandlerFunc(void* clientData, unsigned char* packet,
 			    unsigned packetSize);
+
+typedef void ServerRequestAlternativeByteHandler(void* instance, u_int8_t requestByte);
+// A hack that allows a handler for RTP/RTCP packets received over TCP to process RTSP commands that may also appear within
+// the same TCP connection.  A RTSP server implementation would supply a function like this - as a parameter to
+// "ServerMediaSubsession::startStream()".
 
 class tcpStreamRecord {
 public:
@@ -57,6 +62,7 @@ public:
   void setStreamSocket(int sockNum, unsigned char streamChannelId);
   void addStreamSocket(int sockNum, unsigned char streamChannelId);
   void removeStreamSocket(int sockNum, unsigned char streamChannelId);
+  void setServerRequestAlternativeByteHandler(ServerRequestAlternativeByteHandler* handler, void* clientData);
 
   void sendPacket(unsigned char* packet, unsigned packetSize);
   void startNetworkReading(TaskScheduler::BackgroundHandlerProc*

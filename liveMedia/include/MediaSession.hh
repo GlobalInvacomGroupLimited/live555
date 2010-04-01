@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // A data structure that represents a session that consists of
 // potentially multiple (audio and/or video) sub-sessions
 // (This data structure is used for media *receivers* - i.e., clients.
@@ -249,6 +249,7 @@ protected:
   void setNext(MediaSubsession* next) { fNext = next; }
 
   Boolean parseSDPLine_c(char const* sdpLine);
+  Boolean parseSDPLine_b(char const* sdpLine);
   Boolean parseSDPAttribute_rtpmap(char const* sdpLine);
   Boolean parseSDPAttribute_control(char const* sdpLine);
   Boolean parseSDPAttribute_range(char const* sdpLine);
@@ -274,6 +275,7 @@ protected:
   unsigned fRTPTimestampFrequency;
   char* fControlPath; // holds optional a=control: string
   struct in_addr fSourceFilterAddr; // used for SSM
+  unsigned fBandwidth; // in kilobits-per-second, from b= line
 
   // Parameters set by "a=fmtp:" SDP lines:
   unsigned fAuxiliarydatasizelength, fConstantduration, fConstantsize;

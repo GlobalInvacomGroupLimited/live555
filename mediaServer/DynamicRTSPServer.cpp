@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2009, Live Networks, Inc.  All rights reserved
+// Copyright (c) 1996-2010, Live Networks, Inc.  All rights reserved
 // A subclass of "RTSPServer" that creates "ServerMediaSession"s on demand,
 // based on whether or not the specified stream name exists as a file
 // Implementation
@@ -149,6 +149,13 @@ static ServerMediaSession* createNewSMS(UsageEnvironment& env,
     // change the following to True:
     Boolean convertToULaw = False;
     sms->addSubsession(WAVAudioFileServerMediaSubsession::createNew(env, fileName, reuseSource, convertToULaw));
+  } else if (strcmp(extension, ".dv") == 0) {
+    // Assumed to be a DV Video file
+    // First, make sure that the RTPSinks' buffers will be large enough to handle the huge size of DV frames (as big as 288000).
+    OutPacketBuffer::maxSize = 300000;
+
+    NEW_SMS("DV Video");
+    sms->addSubsession(DVVideoFileServerMediaSubsession::createNew(env, fileName, reuseSource));
   }
 
   return sms;

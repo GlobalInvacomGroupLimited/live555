@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // A RTSP server
 // C++ header
 
@@ -151,6 +151,9 @@ protected:
     Boolean isMulticast() const { return fIsMulticast; }
     static void incomingRequestHandler(void*, int /*mask*/);
     void incomingRequestHandler1();
+    static void handleAlternativeRequestByte(void*, u_int8_t requestByte);
+    void handleAlternativeRequestByte1(u_int8_t requestByte);
+    void handleRequestBytes(int newBytesRead);
     void noteLiveness();
     static void noteClientLiveness(RTSPClientSession* clientSession);
     static void livenessTimeoutTask(RTSPClientSession* clientSession);
@@ -203,7 +206,6 @@ private:
   UserAuthenticationDatabase* fAuthDB;
   unsigned fReclamationTestSeconds;
   HashTable* fServerMediaSessions;
-  unsigned fSessionIdCounter;
 };
 
 #endif

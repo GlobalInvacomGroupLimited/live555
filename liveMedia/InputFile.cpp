@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // Common routines for opening/closing named input files
 // Implementation
 
@@ -35,7 +35,7 @@ FILE* OpenInputFile(UsageEnvironment& env, char const* fileName) {
   // Check for a special case file name: "stdin"
   if (strcmp(fileName, "stdin") == 0) {
     fid = stdin;
-#if defined(__WIN32__) || defined(_WIN32)
+#if (defined(__WIN32__) || defined(_WIN32)) && !defined(_WIN32_WCE)
     _setmode(_fileno(stdin), _O_BINARY); // convert to binary mode
 #endif
   } else {

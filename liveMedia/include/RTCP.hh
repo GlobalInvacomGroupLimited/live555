@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // RTCP
 // C++ header
 
@@ -54,6 +54,7 @@ public:
                               RTCPInstance*& resultInstance);
 
   unsigned numMembers() const;
+  unsigned totSessionBW() const { return fTotSessionBW; }
 
   void setByeHandler(TaskFunc* handlerTask, void* clientData,
 		     Boolean handleActiveParticipantsOnly = True);

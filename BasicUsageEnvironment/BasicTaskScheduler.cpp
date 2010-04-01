@@ -13,12 +13,11 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // Basic Usage Environment: for a simple, non-scripted, console application
 // Implementation
 
 
-#ifndef IMN_PIM
 #include "BasicUsageEnvironment.hh"
 #include "HandlerSet.hh"
 #include <stdio.h>
@@ -75,7 +74,7 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
     // For some unknown reason, select() in Windoze sometimes fails with WSAEINVAL if
     // it was called with no entries set in "readSet".  If this happens, ignore it:
     if (err == WSAEINVAL && readSet.fd_count == 0) {
-      err = 0;
+      err = EINTR;
       // To stop this from happening again, create a dummy readable socket:
       int dummySocketNum = socket(AF_INET, SOCK_DGRAM, 0);
       FD_SET((unsigned)dummySocketNum, &fReadSet);
@@ -88,7 +87,7 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
 #if !defined(_WIN32_WCE)
 	perror("BasicTaskScheduler::SingleStep(): select() fails");
 #endif
-	exit(0);
+	abort();
       }
   }
 
@@ -144,8 +143,8 @@ void BasicTaskScheduler::turnOnBackgroundReadHandling(int socketNum,
 				BackgroundHandlerProc* handlerProc,
 				void* clientData) {
   if (socketNum < 0) return;
-  FD_SET((unsigned)socketNum, &fReadSet);
   fReadHandlers->assignHandler(socketNum, handlerProc, clientData);
+  FD_SET((unsigned)socketNum, &fReadSet);
 
   if (socketNum+1 > fMaxNumSockets) {
     fMaxNumSockets = socketNum+1;
@@ -161,5 +160,17 @@ void BasicTaskScheduler::turnOffBackgroundReadHandling(int socketNum) {
     --fMaxNumSockets;
   }
 }
-#endif
 
+void BasicTaskScheduler::moveSocketHandling(int oldSocketNum, int newSocketNum) {
+  if (oldSocketNum < 0 || newSocketNum < 0) return; // sanity check
+  FD_CLR((unsigned)oldSocketNum, &fReadSet);
+  fReadHandlers->moveHandler(oldSocketNum, newSocketNum);
+  FD_SET((unsigned)newSocketNum, &fReadSet);
+
+  if (oldSocketNum+1 == fMaxNumSockets) {
+    --fMaxNumSockets;
+  }
+  if (newSocketNum+1 > fMaxNumSockets) {
+    fMaxNumSockets = newSocketNum+1;
+  }
+}

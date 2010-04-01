@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // A 'ServerMediaSubsession' object that creates new, unicast, "RTPSink"s
 // on demand, from a MPEG-2 Transport Stream file.
 // C++ header
@@ -55,7 +55,9 @@ private: // redefined virtual functions
                            TaskFunc* rtcpRRHandler,
                            void* rtcpRRHandlerClientData,
                            unsigned short& rtpSeqNum,
-                           unsigned& rtpTimestamp);
+                           unsigned& rtpTimestamp,
+			   ServerRequestAlternativeByteHandler* serverRequestAlternativeByteHandler,
+                           void* serverRequestAlternativeByteHandlerClientData);
   virtual void pauseStream(unsigned clientSessionId, void* streamToken);
   virtual void seekStream(unsigned clientSessionId, void* streamToken, double seekNPT);
   virtual void setStreamScale(unsigned clientSessionId, void* streamToken, float scale);

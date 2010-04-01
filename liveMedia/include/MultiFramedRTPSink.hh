@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // RTP sink for a common kind of payload format: Those which pack multiple,
 // complete codec frames (as many as possible) into each RTP packet.
 // C++ header
@@ -56,10 +56,10 @@ protected:
 					 unsigned numBytesInFrame) const;
       // whether this frame can appear in position >1 in a pkt (default: True)
   virtual unsigned specialHeaderSize() const;
-      // returns the size of any special header used (following the RTP header)
+      // returns the size of any special header used (following the RTP header) (default: 0)
   virtual unsigned frameSpecificHeaderSize() const;
       // returns the size of any frame-specific header used (before each frame
-      // within the packet)
+      // within the packet) (default: 0)
   virtual unsigned computeOverflowForNewFrame(unsigned newFrameSize) const;
       // returns the number of overflow bytes that would be produced by adding a new
       // frame of size "newFrameSize" to the current RTP packet.

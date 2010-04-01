@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2009 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
 // Demultiplexer for a MPEG 1 or 2 Program Stream
 // Implementation
 
@@ -162,7 +162,7 @@ void MPEG1or2Demux::registerReadInterest(u_int8_t streamIdTag,
   if (out.isCurrentlyAwaitingData) {
     envir() << "MPEG1or2Demux::registerReadInterest(): attempt to read stream id "
 	    << (void*)streamIdTag << " more than once!\n";
-    exit(1);
+    abort();
   }
 
   out.to = to; out.maxSize = maxSize;
@@ -538,7 +538,7 @@ unsigned char MPEGProgramStreamParser::parsePESPacket() {
   unsigned char stream_id = get1Byte();
 #if defined(DEBUG) || defined(DEBUG_TIMESTAMPS)
   unsigned char streamNum = stream_id;
-  char* streamTypeStr;
+  char const* streamTypeStr;
   if ((stream_id&0xE0) == 0xC0) {
     streamTypeStr = "audio";
     streamNum = stream_id&~0xE0;
