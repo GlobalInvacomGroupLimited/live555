@@ -60,8 +60,8 @@ public:
   virtual void setResultMsg(MsgString msg) = 0;
   virtual void setResultMsg(MsgString msg1, MsgString msg2) = 0;
   virtual void setResultMsg(MsgString msg1, MsgString msg2, MsgString msg3) = 0;
-  virtual void setResultErrMsg(MsgString msg) = 0;
-	// like setResultMsg(), except that an 'errno' message is appended
+  virtual void setResultErrMsg(MsgString msg, int err = 0) = 0;
+	// like setResultMsg(), except that an 'errno' message is appended.  (If "err == 0", the "getErrno()" code is used instead.)
 
   virtual void appendToResultMsg(MsgString msg) = 0;
 
@@ -117,17 +117,15 @@ public:
   // Combines "unscheduleDelayedTask()" with "scheduleDelayedTask()"
   // (setting "task" to the new task token).
 
-  // For handling socket reads in the background:
+  // For handling socket operations in the background (from the event loop):
   typedef void BackgroundHandlerProc(void* clientData, int mask);
     // Possible bits to set in "mask".  (These are deliberately defined
     // the same as those in Tcl, to make a Tcl-based subclass easy.)
     #define SOCKET_READABLE    (1<<1)
     #define SOCKET_WRITABLE    (1<<2)
     #define SOCKET_EXCEPTION   (1<<3)
-  virtual void turnOnBackgroundReadHandling(int socketNum,
-				BackgroundHandlerProc* handlerProc,
-				void* clientData) = 0;
-  virtual void turnOffBackgroundReadHandling(int socketNum) = 0;
+  virtual void setBackgroundHandling(int socketNum, int conditionSet, BackgroundHandlerProc* handlerProc, void* clientData) = 0;
+  void disableBackgroundHandling(int socketNum) { setBackgroundHandling(socketNum, 0, NULL, NULL); }
   virtual void moveSocketHandling(int oldSocketNum, int newSocketNum) = 0;
         // Changes any socket handling for "oldSocketNum" so that occurs with "newSocketNum" instead.
 
@@ -137,6 +135,12 @@ public:
 	// to proceed.
         // (If "watchVariable" is not NULL, then we return from this
         // routine when *watchVariable != 0)
+
+  // The following two functions are deprecated, and are provided for backwards-compatibility only:
+  void turnOnBackgroundReadHandling(int socketNum, BackgroundHandlerProc* handlerProc, void* clientData) {
+    setBackgroundHandling(socketNum, SOCKET_READABLE, handlerProc, clientData);
+  }
+  void turnOffBackgroundReadHandling(int socketNum) { disableBackgroundHandling(socketNum); }
 
 protected:
   TaskScheduler(); // abstract base class

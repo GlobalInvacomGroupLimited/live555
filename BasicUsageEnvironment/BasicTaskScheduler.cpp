@@ -35,6 +35,8 @@ BasicTaskScheduler* BasicTaskScheduler::createNew() {
 BasicTaskScheduler::BasicTaskScheduler()
   : fMaxNumSockets(0) {
   FD_ZERO(&fReadSet);
+  FD_ZERO(&fWriteSet);
+  FD_ZERO(&fExceptionSet);
 }
 
 BasicTaskScheduler::~BasicTaskScheduler() {
@@ -46,6 +48,8 @@ BasicTaskScheduler::~BasicTaskScheduler() {
 
 void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
   fd_set readSet = fReadSet; // make a copy for this select() call
+  fd_set writeSet = fWriteSet; // ditto
+  fd_set exceptionSet = fExceptionSet; // ditto
 
   DelayInterval const& timeToDelay = fDelayQueue.timeToNextAlarm();
   struct timeval tv_timeToDelay;
@@ -66,8 +70,7 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
     tv_timeToDelay.tv_usec = maxDelayTime%MILLION;
   }
 
-  int selectResult = select(fMaxNumSockets, &readSet, NULL, NULL,
-			    &tv_timeToDelay);
+  int selectResult = select(fMaxNumSockets, &readSet, &writeSet, &exceptionSet, &tv_timeToDelay);
   if (selectResult < 0) {
 #if defined(__WIN32__) || defined(_WIN32)
     int err = WSAGetLastError();
@@ -75,9 +78,11 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
     // it was called with no entries set in "readSet".  If this happens, ignore it:
     if (err == WSAEINVAL && readSet.fd_count == 0) {
       err = EINTR;
-      // To stop this from happening again, create a dummy readable socket:
+      // To stop this from happening again, create a dummy socket:
       int dummySocketNum = socket(AF_INET, SOCK_DGRAM, 0);
       FD_SET((unsigned)dummySocketNum, &fReadSet);
+      FD_SET((unsigned)dummySocketNum, &fWriteSet);
+      FD_SET((unsigned)dummySocketNum, &fExceptionSet);
     }
     if (err != EINTR) {
 #else
@@ -92,7 +97,7 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
   }
 
   // Call the handler function for one readable socket:
-  HandlerIterator iter(*fReadHandlers);
+  HandlerIterator iter(*fHandlers);
   HandlerDescriptor* handler;
   // To ensure forward progress through the handlers, begin past the last
   // socket number that we handled:
@@ -106,13 +111,16 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
     }
   }
   while ((handler = iter.next()) != NULL) {
-    if (FD_ISSET(handler->socketNum, &readSet) &&
-	FD_ISSET(handler->socketNum, &fReadSet) /* sanity check */ &&
-	handler->handlerProc != NULL) {
-      fLastHandledSocketNum = handler->socketNum;
+    int sock = handler->socketNum; // alias
+    int resultConditionSet = 0;
+    if (FD_ISSET(sock, &readSet) && FD_ISSET(sock, &fReadSet)/*sanity check*/) resultConditionSet |= SOCKET_READABLE;
+    if (FD_ISSET(sock, &writeSet) && FD_ISSET(sock, &fWriteSet)/*sanity check*/) resultConditionSet |= SOCKET_WRITABLE;
+    if (FD_ISSET(sock, &exceptionSet) && FD_ISSET(sock, &fExceptionSet)/*sanity check*/) resultConditionSet |= SOCKET_EXCEPTION;
+    if ((resultConditionSet&handler->conditionSet) != 0 && handler->handlerProc != NULL) {
+      fLastHandledSocketNum = sock;
           // Note: we set "fLastHandledSocketNum" before calling the handler,
           // in case the handler calls "doEventLoop()" reentrantly.
-      (*handler->handlerProc)(handler->clientData, SOCKET_READABLE);
+      (*handler->handlerProc)(handler->clientData, resultConditionSet);
       break;
     }
   }
@@ -121,13 +129,16 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
     // so try again from the beginning:
     iter.reset();
     while ((handler = iter.next()) != NULL) {
-      if (FD_ISSET(handler->socketNum, &readSet) &&
-	  FD_ISSET(handler->socketNum, &fReadSet) /* sanity check */ &&
-	  handler->handlerProc != NULL) {
-	fLastHandledSocketNum = handler->socketNum;
+      int sock = handler->socketNum; // alias
+      int resultConditionSet = 0;
+      if (FD_ISSET(sock, &readSet) && FD_ISSET(sock, &fReadSet)/*sanity check*/) resultConditionSet |= SOCKET_READABLE;
+      if (FD_ISSET(sock, &writeSet) && FD_ISSET(sock, &fWriteSet)/*sanity check*/) resultConditionSet |= SOCKET_WRITABLE;
+      if (FD_ISSET(sock, &exceptionSet) && FD_ISSET(sock, &fExceptionSet)/*sanity check*/) resultConditionSet |= SOCKET_EXCEPTION;
+      if ((resultConditionSet&handler->conditionSet) != 0 && handler->handlerProc != NULL) {
+	fLastHandledSocketNum = sock;
 	    // Note: we set "fLastHandledSocketNum" before calling the handler,
             // in case the handler calls "doEventLoop()" reentrantly.
-	(*handler->handlerProc)(handler->clientData, SOCKET_READABLE);
+	(*handler->handlerProc)(handler->clientData, resultConditionSet);
 	break;
       }
     }
@@ -135,37 +146,38 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
   }
 
   // Also handle any delayed event that may have come due.  (Note that we do this *after* calling a socket
-  // handler, in case the delayed event handler modifies the set of readable socket.)
+  // handler, in case the delayed event handler modifies the set of readable sockets.)
   fDelayQueue.handleAlarm();
 }
 
-void BasicTaskScheduler::turnOnBackgroundReadHandling(int socketNum,
-				BackgroundHandlerProc* handlerProc,
-				void* clientData) {
-  if (socketNum < 0) return;
-  fReadHandlers->assignHandler(socketNum, handlerProc, clientData);
-  FD_SET((unsigned)socketNum, &fReadSet);
-
-  if (socketNum+1 > fMaxNumSockets) {
-    fMaxNumSockets = socketNum+1;
-  }
-}
-
-void BasicTaskScheduler::turnOffBackgroundReadHandling(int socketNum) {
+void BasicTaskScheduler
+  ::setBackgroundHandling(int socketNum, int conditionSet, BackgroundHandlerProc* handlerProc, void* clientData) {
   if (socketNum < 0) return;
   FD_CLR((unsigned)socketNum, &fReadSet);
-  fReadHandlers->removeHandler(socketNum);
-
-  if (socketNum+1 == fMaxNumSockets) {
-    --fMaxNumSockets;
+  FD_CLR((unsigned)socketNum, &fWriteSet);
+  FD_CLR((unsigned)socketNum, &fExceptionSet);
+  if (conditionSet == 0) {
+    fHandlers->clearHandler(socketNum);
+    if (socketNum+1 == fMaxNumSockets) {
+      --fMaxNumSockets;
+    }
+  } else {
+    fHandlers->assignHandler(socketNum, conditionSet, handlerProc, clientData);
+    if (socketNum+1 > fMaxNumSockets) {
+      fMaxNumSockets = socketNum+1;
+    }
+    if (conditionSet&SOCKET_READABLE) FD_SET((unsigned)socketNum, &fReadSet);
+    if (conditionSet&SOCKET_WRITABLE) FD_SET((unsigned)socketNum, &fWriteSet);
+    if (conditionSet&SOCKET_EXCEPTION) FD_SET((unsigned)socketNum, &fExceptionSet);
   }
 }
 
 void BasicTaskScheduler::moveSocketHandling(int oldSocketNum, int newSocketNum) {
   if (oldSocketNum < 0 || newSocketNum < 0) return; // sanity check
-  FD_CLR((unsigned)oldSocketNum, &fReadSet);
-  fReadHandlers->moveHandler(oldSocketNum, newSocketNum);
-  FD_SET((unsigned)newSocketNum, &fReadSet);
+  if (FD_ISSET(oldSocketNum, &fReadSet)) {FD_CLR((unsigned)oldSocketNum, &fReadSet); FD_SET((unsigned)newSocketNum, &fReadSet);}
+  if (FD_ISSET(oldSocketNum, &fWriteSet)) {FD_CLR((unsigned)oldSocketNum, &fWriteSet); FD_SET((unsigned)newSocketNum, &fWriteSet);}
+  if (FD_ISSET(oldSocketNum, &fExceptionSet)) {FD_CLR((unsigned)oldSocketNum, &fExceptionSet); FD_SET((unsigned)newSocketNum, &fExceptionSet);}
+  fHandlers->moveHandler(oldSocketNum, newSocketNum);
 
   if (oldSocketNum+1 == fMaxNumSockets) {
     --fMaxNumSockets;
