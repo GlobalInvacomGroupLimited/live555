@@ -49,7 +49,7 @@ public:
 
 unsigned const Segment::headerSize = 4;
 
-#define SegmentQueueSize 20
+#define SegmentQueueSize 10
 
 class SegmentQueue {
 public:

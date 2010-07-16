@@ -168,6 +168,7 @@ static char* getLine(char* startOfLine) {
 
 char* SIPClient::invite(char const* url, Authenticator* authenticator) {
   // First, check whether "url" contains a username:password to be used:
+  fInviteStatusCode = 0;
   char* username; char* password;
   if (authenticator == NULL
       && parseSIPURLUsernamePassword(url, username, password)) {
@@ -313,6 +314,7 @@ char* SIPClient::invite1(Authenticator* authenticator) {
     }
   } while (0);
 
+  fInviteStatusCode = 2;
   return NULL;
 }
 
@@ -729,6 +731,7 @@ Boolean SIPClient::processURL(char const* url) {
     return True;
   } while (0);
 
+  fInviteStatusCode = 1;
   return False;
 }
 

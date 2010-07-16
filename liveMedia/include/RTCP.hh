@@ -131,7 +131,6 @@ private:
 
 private:
   unsigned char* fInBuf;
-  unsigned fNumBytesAlreadyRead;
   OutPacketBuffer* fOutBuf;
   RTPInterface fRTCPInterface;
   unsigned fTotSessionBW;

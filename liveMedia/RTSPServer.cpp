@@ -318,7 +318,7 @@ void RTSPServer::RTSPClientSession::handleAlternativeRequestByte(void* instance,
 
 void RTSPServer::RTSPClientSession::handleAlternativeRequestByte1(u_int8_t requestByte) {
   // Add this character to our buffer; then try to handle the data that we have buffered so far:
-  if (fRequestBufferBytesLeft == 0|| fRequestBytesAlreadySeen >= RTSP_BUFFER_SIZE) return;
+  if (fRequestBufferBytesLeft == 0) return;
   fRequestBuffer[fRequestBytesAlreadySeen] = requestByte;
   handleRequestBytes(1);
 }

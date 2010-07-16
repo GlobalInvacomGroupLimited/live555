@@ -134,25 +134,6 @@ Boolean parseRTSPRequestString(char const* reqStr,
   return True;
 }
 
-Boolean parseRangeParam(char const* paramStr, double& rangeStart, double& rangeEnd) {
-  double start, end;
-  Locale l("C", LC_NUMERIC);
-  if (sscanf(paramStr, "npt = %lf - %lf", &start, &end) == 2) {
-    rangeStart = start;
-    rangeEnd = end;
-  } else if (sscanf(paramStr, "npt = %lf -", &start) == 1) {
-    rangeStart = start;
-    rangeEnd = 0.0;
-  } else if (strcmp(paramStr, "npt=now-") == 0) {
-    rangeStart = 0.0;
-    rangeEnd = 0.0;
-  } else {
-    return False; // The header is malformed
-  }
-
-  return True;
-}
-
 Boolean parseRangeHeader(char const* buf, double& rangeStart, double& rangeEnd) {
   // First, find "Range:"
   while (1) {
@@ -164,5 +145,17 @@ Boolean parseRangeHeader(char const* buf, double& rangeStart, double& rangeEnd) 
   // Then, run through each of the fields, looking for ones we handle:
   char const* fields = buf + 7;
   while (*fields == ' ') ++fields;
-  return parseRangeParam(fields, rangeStart, rangeEnd);
+  double start, end;
+  Locale l("C", LC_NUMERIC);
+  if (sscanf(fields, "npt = %lf - %lf", &start, &end) == 2) {
+    rangeStart = start;
+    rangeEnd = end;
+  } else if (sscanf(fields, "npt = %lf -", &start) == 1) {
+    rangeStart = start;
+    rangeEnd = 0.0;
+  } else {
+    return False; // The header is malformed
+  }
+
+  return True;
 }

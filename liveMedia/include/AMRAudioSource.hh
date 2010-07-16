@@ -40,7 +40,6 @@ protected:
 
 private:
   // redefined virtual functions:
-  virtual char const* MIMEtype() const;
   virtual Boolean isAMRAudioSource() const;
 
 protected:

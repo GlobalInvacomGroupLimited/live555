@@ -45,11 +45,11 @@ private:
 
 BasicTaskScheduler0::BasicTaskScheduler0()
   : fLastHandledSocketNum(-1) {
-  fHandlers = new HandlerSet;
+  fReadHandlers = new HandlerSet;
 }
 
 BasicTaskScheduler0::~BasicTaskScheduler0() {
-  delete fHandlers;
+  delete fReadHandlers;
 }
 
 TaskToken BasicTaskScheduler0::scheduleDelayedTask(int64_t microseconds,
@@ -80,8 +80,7 @@ void BasicTaskScheduler0::doEventLoop(char* watchVariable) {
 
 ////////// HandlerSet (etc.) implementation //////////
 
-HandlerDescriptor::HandlerDescriptor(HandlerDescriptor* nextHandler)
-  : conditionSet(0), handlerProc(NULL) {
+HandlerDescriptor::HandlerDescriptor(HandlerDescriptor* nextHandler) {
   // Link this descriptor into a doubly-linked list:
   if (nextHandler == this) { // initialization
     fNextHandler = fPrevHandler = this;
@@ -112,7 +111,9 @@ HandlerSet::~HandlerSet() {
 }
 
 void HandlerSet
-::assignHandler(int socketNum, int conditionSet, TaskScheduler::BackgroundHandlerProc* handlerProc, void* clientData) {
+::assignHandler(int socketNum,
+		TaskScheduler::BackgroundHandlerProc* handlerProc,
+		void* clientData) {
   // First, see if there's already a handler for this socket:
   HandlerDescriptor* handler = lookupHandler(socketNum);
   if (handler == NULL) { // No existing handler, so create a new descr:
@@ -120,12 +121,11 @@ void HandlerSet
     handler->socketNum = socketNum;
   }
 
-  handler->conditionSet = conditionSet;
   handler->handlerProc = handlerProc;
   handler->clientData = clientData;
 }
 
-void HandlerSet::clearHandler(int socketNum) {
+void HandlerSet::removeHandler(int socketNum) {
   HandlerDescriptor* handler = lookupHandler(socketNum);
   delete handler;
 }

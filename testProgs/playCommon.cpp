@@ -20,6 +20,9 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #include "playCommon.hh"
 #include "BasicUsageEnvironment.hh"
 #include "GroupsockHelper.hh"
+#ifdef SUPPORT_REAL_RTSP
+#include "../RealRTSP/include/RealRTSP.hh"
+#endif
 
 #if defined(__WIN32__) || defined(_WIN32)
 #define snprintf _snprintf
@@ -29,13 +32,9 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #endif
 
 // Forward function definitions:
-void continueAfterOPTIONS(RTSPClient* client, int resultCode, char* resultString);
-void continueAfterDESCRIBE(RTSPClient* client, int resultCode, char* resultString);
-void continueAfterSETUP(RTSPClient* client, int resultCode, char* resultString);
-void continueAfterPLAY(RTSPClient* client, int resultCode, char* resultString);
-void continueAfterTEARDOWN(RTSPClient* client, int resultCode, char* resultString);
-
 void setupStreams();
+void startPlayingStreams();
+void tearDownStreams();
 void closeMediaSinks();
 void subsessionAfterPlaying(void* clientData);
 void subsessionByeHandler(void* clientData);
@@ -50,8 +49,6 @@ void beginQOSMeasurement();
 char const* progName;
 UsageEnvironment* env;
 Medium* ourClient = NULL;
-Authenticator* ourAuthenticator = NULL;
-char const* streamURL = NULL;
 MediaSession* session = NULL;
 TaskToken sessionTimerTask = NULL;
 TaskToken arrivalCheckTimerTask = NULL;
@@ -70,8 +67,7 @@ int verbosityLevel = 1; // by default, print verbose output
 double duration = 0;
 double durationSlop = -1.0; // extra seconds to play at the end
 double initialSeekTime = 0.0f;
-float scale = 1.0f;
-double endTime;
+double scale = 1.0f;
 unsigned interPacketGapMaxTime = 0;
 unsigned totNumPacketsReceived = ~0; // used if checking inter-packet gaps
 Boolean playContinuously = False;
@@ -81,7 +77,6 @@ Boolean sendOptionsRequestOnly = False;
 Boolean oneFilePerFrame = False;
 Boolean notifyOnPacketArrival = False;
 Boolean streamUsingTCP = False;
-unsigned short desiredPortNum = 0;
 portNumBits tunnelOverHTTPPortNum = 0;
 char* username = NULL;
 char* password = NULL;
@@ -102,6 +97,7 @@ Boolean packetLossCompensate = False;
 Boolean syncStreams = False;
 Boolean generateHintTracks = False;
 unsigned qosMeasurementIntervalMS = 0; // 0 means: Don't output QOS data
+unsigned statusCode = 0;
 
 struct timeval startTime;
 
@@ -114,6 +110,7 @@ void usage() {
        << "]" << (supportCodecSelection ? " [-A <audio-codec-rtp-payload-format-code>|-M <mime-subtype-name>]" : "")
        << " [-s <initial-seek-time>] [-z <scale>]"
        << " [-w <width> -h <height>] [-f <frames-per-second>] [-y] [-H] [-Q [<measurement-interval>]] [-F <filename-prefix>] [-b <file-sink-buffer-size>] [-B <input-socket-buffer-size>] [-I <input-interface-ip-address>] [-m] <url> (or " << progName << " -o [-V] <url>)\n";
+  //##### Add "-R <dest-rtsp-url>" #####
   shutdown();
 }
 
@@ -131,6 +128,8 @@ int main(int argc, char** argv) {
   signal(SIGHUP, signalHandlerShutdown);
   signal(SIGUSR1, signalHandlerShutdown);
 #endif
+
+  unsigned short desiredPortNum = 0;
 
   // unfortunately we can't use getopt() here, as Windoze doesn't have it
   while (argc > 2) {
@@ -309,9 +308,6 @@ int main(int argc, char** argv) {
 	  ++argv; --argc;
 	}
       }
-
-      ourAuthenticator = new Authenticator;
-      ourAuthenticator->setUsernameAndPassword(username, password);
       break;
     }
 
@@ -489,10 +485,10 @@ int main(int argc, char** argv) {
     durationSlop = qosMeasurementIntervalMS > 0 ? 0.0 : 5.0;
   }
 
-  streamURL = argv[1];
+  char* url = argv[1];
 
   // Create our client object:
-  ourClient = createClient(*env, streamURL, verbosityLevel, progName);
+  ourClient = createClient(*env, verbosityLevel, progName);
   if (ourClient == NULL) {
     *env << "Failed to create " << clientProtocolName
 		<< " client: " << env->getResultMsg() << "\n";
@@ -501,40 +497,34 @@ int main(int argc, char** argv) {
 
   if (sendOptionsRequest) {
     // Begin by sending an "OPTIONS" command:
-    getOptions(continueAfterOPTIONS);
-  } else {
-    continueAfterOPTIONS(NULL, 0, NULL);
-  }
-
-  // All subsequent activity takes place within the event loop:
-  env->taskScheduler().doEventLoop(); // does not return
-
-  return 0; // only to prevent compiler warning
-}
-
-void continueAfterOPTIONS(RTSPClient*, int resultCode, char* resultString) {
-  if (sendOptionsRequestOnly) {
-    if (resultCode != 0) {
-      *env << clientProtocolName << " \"OPTIONS\" request failed: " << resultString << "\n";
-    } else {
-      *env << clientProtocolName << " \"OPTIONS\" request returned: " << resultString << "\n";
+    char* optionsResponse
+      = getOptionsResponse(ourClient, url, username, password);
+    if (sendOptionsRequestOnly) {
+      if (optionsResponse == NULL) {
+	*env << clientProtocolName << " \"OPTIONS\" request failed: "
+	     << env->getResultMsg() << "\n";
+      } else {
+	*env << clientProtocolName << " \"OPTIONS\" request returned: "
+	     << optionsResponse << "\n";
+      }
+      shutdown();
     }
-    shutdown();
-  }
-  delete[] resultString;
-
-  // Next, get a SDP description for the stream:
-  getSDPDescription(continueAfterDESCRIBE);
-}
-
-void continueAfterDESCRIBE(RTSPClient*, int resultCode, char* resultString) {
-  if (resultCode != 0) {
-    *env << "Failed to get a SDP description from URL \"" << streamURL << "\": " << resultString << "\n";
-    shutdown();
+    delete[] optionsResponse;
   }
 
-  char* sdpDescription = resultString;
-  *env << "Opened URL \"" << streamURL << "\", returning a SDP description:\n" << sdpDescription << "\n";
+  // Open the URL, to get a SDP description:
+  char* sdpDescription
+    = getSDPDescriptionFromURL(ourClient, url, username, password,
+			       proxyServerName, proxyServerPortNum,
+			       desiredPortNum);
+  if (sdpDescription == NULL) {
+    *env << "Failed to get a SDP description from URL \"" << url
+		<< "\": " << env->getResultMsg() << "\n";
+    shutdown();
+  }
+
+  *env << "Opened URL \"" << url
+	  << "\", returning a SDP description:\n" << sdpDescription << "\n";
 
   // Create a media session object from this SDP description:
   session = MediaSession::createNew(*env, sdpDescription);
@@ -627,41 +617,6 @@ void continueAfterDESCRIBE(RTSPClient*, int resultCode, char* resultString) {
 
   // Perform additional 'setup' on each subsession, before playing them:
   setupStreams();
-}
-
-MediaSubsession *subsession;
-Boolean madeProgress = False;
-void continueAfterSETUP(RTSPClient*, int resultCode, char* resultString) {
-  if (resultCode == 0) {
-      *env << "Setup \"" << subsession->mediumName()
-	   << "/" << subsession->codecName()
-	   << "\" subsession (client ports " << subsession->clientPortNum()
-	   << "-" << subsession->clientPortNum()+1 << ")\n";
-      madeProgress = True;
-  } else {
-    *env << "Failed to setup \"" << subsession->mediumName()
-	 << "/" << subsession->codecName()
-	 << "\" subsession: " << env->getResultMsg() << "\n";
-  }
-
-  // Set up the next subsession, if any:
-  setupStreams();
-}
-
-void setupStreams() {
-  static MediaSubsessionIterator* setupIter = NULL;
-  if (setupIter == NULL) setupIter = new MediaSubsessionIterator(*session);
-  while ((subsession = setupIter->next()) != NULL) {
-    // We have another subsession left to set up:
-    if (subsession->clientPortNum() == 0) continue; // port # was not set
-
-    setupSubsession(subsession, streamUsingTCP, continueAfterSETUP);
-    return;
-  }
-
-  // We're done setting up subsessions.
-  delete setupIter;
-  if (!madeProgress) shutdown();
 
   // Create output files:
   if (createReceivers) {
@@ -694,10 +649,48 @@ void setupStreams() {
       }
 
       aviOut->startPlaying(sessionAfterPlaying, NULL);
+#ifdef SUPPORT_REAL_RTSP
+    } else if (session->isRealNetworksRDT) {
+      // For RealNetworks' sessions, we create a single output file,
+      // named "output.rm".
+      char outFileName[1000];
+      if (singleMedium == NULL) {
+	snprintf(outFileName, sizeof outFileName, "%soutput.rm", fileNamePrefix);
+      } else {
+	// output to 'stdout' as normal, even though we actually output all media
+	sprintf(outFileName, "stdout");
+      }
+      FileSink* fileSink = FileSink::createNew(*env, outFileName,
+					       fileSinkBufferSize, oneFilePerFrame);
+
+      // The output file needs to begin with a special 'RMFF' header,
+      // in order for it to be usable.  Write this header first:
+      unsigned headerSize;
+      unsigned char* headerData = RealGenerateRMFFHeader(session, headerSize);
+      struct timeval timeNow;
+      gettimeofday(&timeNow, NULL);
+      fileSink->addData(headerData, headerSize, timeNow);
+      delete[] headerData;
+
+      // Start playing the output file from the first subsession.
+      // (Hack: Because all subsessions' data is actually multiplexed on the
+      // single RTSP TCP connection, playing from one subsession is sufficient.)
+      iter.reset();
+      madeProgress = False;
+      while ((subsession = iter.next()) != NULL) {
+	if (subsession->readSource() == NULL) continue; // was not initiated
+
+	fileSink->startPlaying(*(subsession->readSource()),
+			       subsessionAfterPlaying, subsession);
+	madeProgress = True;
+	break; // play from one subsession only
+      }
+      if (!madeProgress) shutdown();
+#endif
     } else {
       // Create and start "FileSink"s for each subsession:
       madeProgress = False;
-      MediaSubsessionIterator iter(*session);
+      iter.reset();
       while ((subsession = iter.next()) != NULL) {
 	if (subsession->readSource() == NULL) continue; // was not initiated
 
@@ -777,27 +770,47 @@ void setupStreams() {
   }
 
   // Finally, start playing each subsession, to start the data flow:
+
+  startPlayingStreams();
+
+  env->taskScheduler().doEventLoop(); // does not return
+
+  return 0; // only to prevent compiler warning
+}
+
+
+void setupStreams() {
+  MediaSubsessionIterator iter(*session);
+  MediaSubsession *subsession;
+  Boolean madeProgress = False;
+
+  while ((subsession = iter.next()) != NULL) {
+    if (subsession->clientPortNum() == 0) continue; // port # was not set
+
+    if (!clientSetupSubsession(ourClient, subsession, streamUsingTCP)) {
+      *env << "Failed to setup \"" << subsession->mediumName()
+		<< "/" << subsession->codecName()
+		<< "\" subsession: " << env->getResultMsg() << "\n";
+    } else {
+      *env << "Setup \"" << subsession->mediumName()
+		<< "/" << subsession->codecName()
+		<< "\" subsession (client ports " << subsession->clientPortNum()
+		<< "-" << subsession->clientPortNum()+1 << ")\n";
+      madeProgress = True;
+    }
+  }
+  if (!madeProgress) shutdown();
+}
+
+void startPlayingStreams() {
   if (duration == 0) {
     if (scale > 0) duration = session->playEndTime() - initialSeekTime; // use SDP end time
     else if (scale < 0) duration = initialSeekTime;
   }
   if (duration < 0) duration = 0.0;
 
-  endTime = initialSeekTime;
-  if (scale > 0) {
-    if (duration <= 0) endTime = -1.0f;
-    else endTime = initialSeekTime + duration;
-  } else {
-    endTime = initialSeekTime - duration;
-    if (endTime < 0) endTime = 0.0f;
-  }
-
-  startPlayingSession(session, initialSeekTime, endTime, scale, continueAfterPLAY);
-}
-
-void continueAfterPLAY(RTSPClient*, int resultCode, char* resultString) {
-  if (resultCode != 0) {
-    *env << "Failed to start playing session: " << resultString << "\n";
+  if (!clientStartPlayingSession(ourClient, session)) {
+    *env << "Failed to start playing session: " << env->getResultMsg() << "\n";
     shutdown();
   } else {
     *env << "Started playing session\n";
@@ -813,12 +826,21 @@ void continueAfterPLAY(RTSPClient*, int resultCode, char* resultString) {
   Boolean timerIsBeingUsed = False;
   double secondsToDelay = duration;
   if (duration > 0) {
-    timerIsBeingUsed = True;
-    double absScale = scale > 0 ? scale : -scale; // ASSERT: scale != 0
-    secondsToDelay = duration/absScale + durationSlop;
+    double const maxDelayTime
+      = (double)( ((unsigned)0x7FFFFFFF)/1000000.0 );
+    if (duration > maxDelayTime) {
+      *env << "Warning: specified end time " << duration
+		<< " exceeds maximum " << maxDelayTime
+		<< "; will not do a delayed shutdown\n";
+    } else {
+      timerIsBeingUsed = True;
+      double absScale = scale > 0 ? scale : -scale; // ASSERT: scale != 0
+      secondsToDelay = duration/absScale + durationSlop;
 
-    int64_t uSecsToDelay = (int64_t)(secondsToDelay*1000000.0);
-    sessionTimerTask = env->taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*)sessionTimerHandler, (void*)NULL);
+      int uSecsToDelay = (int)(secondsToDelay*1000000.0);
+      sessionTimerTask = env->taskScheduler().scheduleDelayedTask(
+         uSecsToDelay, (TaskFunc*)sessionTimerHandler, (void*)NULL);
+    }
   }
 
   char const* actionString
@@ -842,6 +864,12 @@ void continueAfterPLAY(RTSPClient*, int resultCode, char* resultString) {
   // Watch for incoming packets (if desired):
   checkForPacketArrival(NULL);
   checkInterPacketGaps(NULL);
+}
+
+void tearDownStreams() {
+  if (session == NULL) return;
+
+  clientTearDownSession(ourClient, session);
 }
 
 void closeMediaSinks() {
@@ -894,7 +922,7 @@ void sessionAfterPlaying(void* /*clientData*/) {
     shutdown(0);
   } else {
     // We've been asked to play the stream(s) over again:
-    startPlayingSession(session, initialSeekTime, endTime, scale, continueAfterPLAY);
+    startPlayingStreams();
   }
 }
 
@@ -914,6 +942,15 @@ public:
       totNumPacketsReceived(0), totNumPacketsExpected(0) {
     measurementEndTime = measurementStartTime = startTime;
 
+#ifdef SUPPORT_REAL_RTSP
+    if (session->isRealNetworksRDT) { // hack for RealMedia sessions (RDT, not RTP)
+      RealRDTSource* rdt = (RealRDTSource*)src;
+      kBytesTotal = rdt->totNumKBytesReceived();
+      totNumPacketsReceived = rdt->totNumPacketsReceived();
+      totNumPacketsExpected = totNumPacketsReceived; // because we use TCP
+      return;
+    }
+#endif
     RTPReceptionStatsDB::Iterator statsIter(src->receptionStatsDB());
     // Assume that there's only one SSRC source (usually the case):
     RTPReceptionStats* stats = statsIter.next(True);
@@ -977,6 +1014,24 @@ void qosMeasurementRecord
   double timeDiff = secsDiff + usecsDiff/1000000.0;
   measurementEndTime = timeNow;
 
+#ifdef SUPPORT_REAL_RTSP
+  if (session->isRealNetworksRDT) { // hack for RealMedia sessions (RDT, not RTP)
+    RealRDTSource* rdt = (RealRDTSource*)fSource;
+    double kBytesTotalNow = rdt->totNumKBytesReceived();
+    double kBytesDeltaNow = kBytesTotalNow - kBytesTotal;
+    kBytesTotal = kBytesTotalNow;
+
+    double kbpsNow = timeDiff == 0.0 ? 0.0 : 8*kBytesDeltaNow/timeDiff;
+    if (kbpsNow < 0.0) kbpsNow = 0.0; // in case of roundoff error
+    if (kbpsNow < kbits_per_second_min) kbits_per_second_min = kbpsNow;
+    if (kbpsNow > kbits_per_second_max) kbits_per_second_max = kbpsNow;
+
+    totNumPacketsReceived = rdt->totNumPacketsReceived();
+    totNumPacketsExpected = totNumPacketsReceived; // because we use TCP
+    packet_loss_fraction_min = packet_loss_fraction_max = 0.0; // ditto
+    return;
+  }
+#endif
   RTPReceptionStatsDB::Iterator statsIter(fSource->receptionStatsDB());
   // Assume that there's only one SSRC source (usually the case):
   RTPReceptionStats* stats = statsIter.next(True);
@@ -1019,6 +1074,9 @@ void beginQOSMeasurement() {
   MediaSubsession* subsession;
   while ((subsession = iter.next()) != NULL) {
     RTPSource* src = subsession->rtpSource();
+#ifdef SUPPORT_REAL_RTSP
+    if (session->isRealNetworksRDT) src = (RTPSource*)(subsession->readSource()); // hack
+#endif
     if (src == NULL) continue;
 
     qosMeasurementRecord* qosRecord
@@ -1033,8 +1091,11 @@ void beginQOSMeasurement() {
 }
 
 void printQOSData(int exitCode) {
+  if (exitCode != 0 && statusCode == 0) statusCode = 2;
   *env << "begin_QOS_statistics\n";
-  
+  *env << "server_availability\t" << (statusCode == 1 ? 0 : 100) << "\n";
+  *env << "stream_availability\t" << (statusCode == 0 ? 100 : 0) << "\n";
+
   // Print out stats for each active subsession:
   qosMeasurementRecord* curQOSRecord = qosRecordHead;
   if (session != NULL) {
@@ -1042,20 +1103,23 @@ void printQOSData(int exitCode) {
     MediaSubsession* subsession;
     while ((subsession = iter.next()) != NULL) {
       RTPSource* src = subsession->rtpSource();
+#ifdef SUPPORT_REAL_RTSP
+      if (session->isRealNetworksRDT) src = (RTPSource*)(subsession->readSource()); // hack
+#endif
       if (src == NULL) continue;
-      
+
       *env << "subsession\t" << subsession->mediumName()
 	   << "/" << subsession->codecName() << "\n";
-      
+
       unsigned numPacketsReceived = 0, numPacketsExpected = 0;
-      
+
       if (curQOSRecord != NULL) {
 	numPacketsReceived = curQOSRecord->totNumPacketsReceived;
 	numPacketsExpected = curQOSRecord->totNumPacketsExpected;
       }
       *env << "num_packets_received\t" << numPacketsReceived << "\n";
       *env << "num_packets_lost\t" << numPacketsExpected - numPacketsReceived << "\n";
-      
+
       if (curQOSRecord != NULL) {
 	unsigned secsDiff = curQOSRecord->measurementEndTime.tv_sec
 	  - curQOSRecord->measurementStartTime.tv_sec;
@@ -1063,11 +1127,11 @@ void printQOSData(int exitCode) {
 	  - curQOSRecord->measurementStartTime.tv_usec;
 	double measurementTime = secsDiff + usecsDiff/1000000.0;
 	*env << "elapsed_measurement_time\t" << measurementTime << "\n";
-	
+
 	*env << "kBytes_received_total\t" << curQOSRecord->kBytesTotal << "\n";
-	
+
 	*env << "measurement_sampling_interval_ms\t" << qosMeasurementIntervalMS << "\n";
-	
+
 	if (curQOSRecord->kbits_per_second_max == 0) {
 	  // special case: we didn't receive any data:
 	  *env <<
@@ -1080,7 +1144,7 @@ void printQOSData(int exitCode) {
 	       << (measurementTime == 0.0 ? 0.0 : 8*curQOSRecord->kBytesTotal/measurementTime) << "\n";
 	  *env << "kbits_per_second_max\t" << curQOSRecord->kbits_per_second_max << "\n";
 	}
-	
+
 	*env << "packet_loss_percentage_min\t" << 100*curQOSRecord->packet_loss_fraction_min << "\n";
 	double packetLossFraction = numPacketsExpected == 0 ? 1.0
 	  : 1.0 - numPacketsReceived/(double)numPacketsExpected;
@@ -1088,20 +1152,35 @@ void printQOSData(int exitCode) {
 	*env << "packet_loss_percentage_ave\t" << 100*packetLossFraction << "\n";
 	*env << "packet_loss_percentage_max\t"
 	     << (packetLossFraction == 1.0 ? 100.0 : 100*curQOSRecord->packet_loss_fraction_max) << "\n";
-	
-	RTPReceptionStatsDB::Iterator statsIter(src->receptionStatsDB());
-	// Assume that there's only one SSRC source (usually the case):
-	RTPReceptionStats* stats = statsIter.next(True);
-	if (stats != NULL) {
-	  *env << "inter_packet_gap_ms_min\t" << stats->minInterPacketGapUS()/1000.0 << "\n";
-	  struct timeval totalGaps = stats->totalInterPacketGaps();
+
+#ifdef SUPPORT_REAL_RTSP
+	if (session->isRealNetworksRDT) {
+	  RealRDTSource* rdt = (RealRDTSource*)src;
+	  *env << "inter_packet_gap_ms_min\t" << rdt->minInterPacketGapUS()/1000.0 << "\n";
+	  struct timeval totalGaps = rdt->totalInterPacketGaps();
 	  double totalGapsMS = totalGaps.tv_sec*1000.0 + totalGaps.tv_usec/1000.0;
-	  unsigned totNumPacketsReceived = stats->totNumPacketsReceived();
+	  unsigned totNumPacketsReceived = rdt->totNumPacketsReceived();
 	  *env << "inter_packet_gap_ms_ave\t"
 	       << (totNumPacketsReceived == 0 ? 0.0 : totalGapsMS/totNumPacketsReceived) << "\n";
-	  *env << "inter_packet_gap_ms_max\t" << stats->maxInterPacketGapUS()/1000.0 << "\n";
+	  *env << "inter_packet_gap_ms_max\t" << rdt->maxInterPacketGapUS()/1000.0 << "\n";
+	} else {
+#endif
+	  RTPReceptionStatsDB::Iterator statsIter(src->receptionStatsDB());
+	  // Assume that there's only one SSRC source (usually the case):
+	  RTPReceptionStats* stats = statsIter.next(True);
+	  if (stats != NULL) {
+	    *env << "inter_packet_gap_ms_min\t" << stats->minInterPacketGapUS()/1000.0 << "\n";
+	    struct timeval totalGaps = stats->totalInterPacketGaps();
+	    double totalGapsMS = totalGaps.tv_sec*1000.0 + totalGaps.tv_usec/1000.0;
+	    unsigned totNumPacketsReceived = stats->totNumPacketsReceived();
+	    *env << "inter_packet_gap_ms_ave\t"
+		 << (totNumPacketsReceived == 0 ? 0.0 : totalGapsMS/totNumPacketsReceived) << "\n";
+	    *env << "inter_packet_gap_ms_max\t" << stats->maxInterPacketGapUS()/1000.0 << "\n";
+	  }
+#ifdef SUPPORT_REAL_RTSP
 	}
-	
+#endif
+
 	curQOSRecord = curQOSRecord->fNext;
       }
     }
@@ -1111,9 +1190,7 @@ void printQOSData(int exitCode) {
   delete qosRecordHead;
 }
 
-int shutdownExitCode;
 void shutdown(int exitCode) {
-  shutdownExitCode = exitCode;
   if (env != NULL) {
     env->taskScheduler().unscheduleDelayedTask(sessionTimerTask);
     env->taskScheduler().unscheduleDelayedTask(arrivalCheckTimerTask);
@@ -1125,25 +1202,18 @@ void shutdown(int exitCode) {
     printQOSData(exitCode);
   }
 
-  // Teardown, then shutdown, any outstanding RTP/RTCP subsessions
-  if (session != NULL) {
-    tearDownSession(session, continueAfterTEARDOWN);
-  } else {
-    continueAfterTEARDOWN(NULL, 0, NULL);
-  }
-}
-
-void continueAfterTEARDOWN(RTSPClient*, int /*resultCode*/, char* /*resultString*/) {
-  // Now that we've stopped any more incoming data from arriving, close our output files:
+  // Close our output files:
   closeMediaSinks();
+
+  // Teardown, then shutdown, any outstanding RTP/RTCP subsessions
+  tearDownStreams();
   Medium::close(session);
 
   // Finally, shut down our client:
-  delete ourAuthenticator;
   Medium::close(ourClient);
 
   // Adios...
-  exit(shutdownExitCode);
+  exit(exitCode);
 }
 
 void signalHandlerShutdown(int /*sig*/) {
