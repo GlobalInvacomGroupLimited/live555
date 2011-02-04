@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // A class used for digest authentication.
 // Implementation
 
@@ -30,14 +30,16 @@ Authenticator::Authenticator() {
   assign(NULL, NULL, NULL, NULL, False);
 }
 
+Authenticator::Authenticator(char const* username, char const* password, Boolean passwordIsMD5) {
+  assign(NULL, NULL, username, password, passwordIsMD5);
+}
+
 Authenticator::Authenticator(const Authenticator& orig) {
-  assign(orig.realm(), orig.nonce(), orig.username(), orig.password(),
-	 orig.fPasswordIsMD5);
+  assign(orig.realm(), orig.nonce(), orig.username(), orig.password(), orig.fPasswordIsMD5);
 }
 
 Authenticator& Authenticator::operator=(const Authenticator& rightSide) {
   if (&rightSide != this) {
-    reset();
     assign(rightSide.realm(), rightSide.nonce(),
 	   rightSide.username(), rightSide.password(), rightSide.fPasswordIsMD5);
   }
@@ -141,17 +143,14 @@ void Authenticator::assignRealmAndNonce(char const* realm, char const* nonce) {
   fNonce = strDup(nonce);
 }
 
-void Authenticator
-::assignUsernameAndPassword(char const* username, char const* password,
-			    Boolean passwordIsMD5) {
+void Authenticator::assignUsernameAndPassword(char const* username, char const* password, Boolean passwordIsMD5) {
   fUsername = strDup(username);
   fPassword = strDup(password);
   fPasswordIsMD5 = passwordIsMD5;
 }
 
 void Authenticator::assign(char const* realm, char const* nonce,
-			   char const* username, char const* password,
-			   Boolean passwordIsMD5) {
+			   char const* username, char const* password, Boolean passwordIsMD5) {
   assignRealmAndNonce(realm, nonce);
   assignUsernameAndPassword(username, password, passwordIsMD5);
 }

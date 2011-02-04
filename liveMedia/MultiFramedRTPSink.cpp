@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // RTP sink for a common kind of payload format: Those which pack multiple,
 // complete codec frames (as many as possible) into each RTP packet.
 // Implementation
@@ -237,11 +237,10 @@ void MultiFramedRTPSink
 
   if (numTruncatedBytes > 0) {
     unsigned const bufferSize = fOutBuf->totalBytesAvailable();
-    unsigned newMaxSize = frameSize + numTruncatedBytes;
     envir() << "MultiFramedRTPSink::afterGettingFrame1(): The input frame data was too large for our buffer size ("
 	    << bufferSize << ").  "
 	    << numTruncatedBytes << " bytes of trailing data was dropped!  Correct this by increasing \"OutPacketBuffer::maxSize\" to at least "
-	    << newMaxSize << ", *before* creating this 'RTPSink'.  (Current value is "
+	    << OutPacketBuffer::maxSize + numTruncatedBytes << ", *before* creating this 'RTPSink'.  (Current value is "
 	    << OutPacketBuffer::maxSize << ".)\n";
   }
   unsigned curFragmentationOffset = fCurFragmentationOffset;
@@ -389,17 +388,14 @@ void MultiFramedRTPSink::sendPacketIfNecessary() {
     // sending the next packet.
     struct timeval timeNow;
     gettimeofday(&timeNow, NULL);
-    int uSecondsToGo;
-    if (fNextSendTime.tv_sec < timeNow.tv_sec
-	|| (fNextSendTime.tv_sec == timeNow.tv_sec && fNextSendTime.tv_usec < timeNow.tv_usec)) {
-      uSecondsToGo = 0; // prevents integer underflow if too far behind
-    } else {
-      uSecondsToGo = (fNextSendTime.tv_sec - timeNow.tv_sec)*1000000 + (fNextSendTime.tv_usec - timeNow.tv_usec);
+    int secsDiff = fNextSendTime.tv_sec - timeNow.tv_sec;
+    int64_t uSecondsToGo = secsDiff*1000000 + (fNextSendTime.tv_usec - timeNow.tv_usec);
+    if (uSecondsToGo < 0 || secsDiff < 0) { // sanity check: Make sure that the time-to-delay is non-negative:
+      uSecondsToGo = 0;
     }
 
     // Delay this amount of time:
-    nextTask() = envir().taskScheduler().scheduleDelayedTask(uSecondsToGo,
-						(TaskFunc*)sendNext, this);
+    nextTask() = envir().taskScheduler().scheduleDelayedTask(uSecondsToGo, (TaskFunc*)sendNext, this);
   }
 }
 

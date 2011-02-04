@@ -14,16 +14,13 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // A data structure that represents a session that consists of
 // potentially multiple (audio and/or video) sub-sessions
 // Implementation
 
 #include "liveMedia.hh"
 #include "Locale.hh"
-#ifdef SUPPORT_REAL_RTSP
-#include "../RealRTSP/include/RealRTSP.hh"
-#endif
 #include "GroupsockHelper.hh"
 #include <ctype.h>
 
@@ -65,9 +62,6 @@ MediaSession::MediaSession(UsageEnvironment& env)
     fConnectionEndpointName(NULL), fMaxPlayStartTime(0.0f), fMaxPlayEndTime(0.0f),
     fScale(1.0f), fMediaSessionType(NULL), fSessionName(NULL), fSessionDescription(NULL),
     fControlPath(NULL) {
-#ifdef SUPPORT_REAL_RTSP
-  RealInitSDPAttributes(this);
-#endif
   fSourceFilterAddr.s_addr = 0;
 
   // Get our host name, and use this for the RTCP CNAME:
@@ -91,9 +85,6 @@ MediaSession::~MediaSession() {
   delete[] fSessionName;
   delete[] fSessionDescription;
   delete[] fControlPath;
-#ifdef SUPPORT_REAL_RTSP
-  RealReclaimSDPAttributes(this);
-#endif
 }
 
 Boolean MediaSession::isMediaSession() const {
@@ -123,9 +114,6 @@ Boolean MediaSession::initializeWithSDP(char const* sdpDescription) {
     if (parseSDPAttribute_range(sdpLine)) continue;
     if (parseSDPAttribute_type(sdpLine)) continue;
     if (parseSDPAttribute_source_filter(sdpLine)) continue;
-#ifdef SUPPORT_REAL_RTSP
-    if (RealParseSDPAttributes(this, sdpLine)) continue;
-#endif
   }
 
   while (sdpLine != NULL) {
@@ -219,9 +207,6 @@ Boolean MediaSession::initializeWithSDP(char const* sdpDescription) {
       if (subsession->parseSDPAttribute_source_filter(sdpLine)) continue;
       if (subsession->parseSDPAttribute_x_dimensions(sdpLine)) continue;
       if (subsession->parseSDPAttribute_framerate(sdpLine)) continue;
-#ifdef SUPPORT_REAL_RTSP
-      if (RealParseSDPAttributes(subsession, sdpLine)) continue;
-#endif
 
       // (Later, check for malformed lines, and other valid SDP lines#####)
     }
@@ -550,15 +535,12 @@ MediaSubsession::MediaSubsession(MediaSession& parent)
     fObjecttype(0), fOctetalign(0), fProfile_level_id(0), fRobustsorting(0),
     fSizelength(0), fStreamstateindication(0), fStreamtype(0),
     fCpresent(False), fRandomaccessindication(False),
-    fConfig(NULL), fMode(NULL), fSpropParameterSets(NULL),
+    fConfig(NULL), fMode(NULL), fSpropParameterSets(NULL), fEmphasis(NULL), fChannelOrder(NULL),
     fPlayStartTime(0.0), fPlayEndTime(0.0),
     fVideoWidth(0), fVideoHeight(0), fVideoFPS(0), fNumChannels(1), fScale(1.0f), fNPT_PTS_Offset(0.0f),
     fRTPSocket(NULL), fRTCPSocket(NULL),
     fRTPSource(NULL), fRTCPInstance(NULL), fReadSource(NULL) {
   rtpInfo.seqNum = 0; rtpInfo.timestamp = 0; rtpInfo.infoIsNew = False;
-#ifdef SUPPORT_REAL_RTSP
-  RealInitSDPAttributes(this);
-#endif
 }
 
 MediaSubsession::~MediaSubsession() {
@@ -566,12 +548,10 @@ MediaSubsession::~MediaSubsession() {
 
   delete[] fConnectionEndpointName; delete[] fSavedSDPLines;
   delete[] fMediumName; delete[] fCodecName; delete[] fProtocolName;
-  delete[] fControlPath; delete[] fConfig; delete[] fMode; delete[] fSpropParameterSets;
+  delete[] fControlPath;
+  delete[] fConfig; delete[] fMode; delete[] fSpropParameterSets; delete[] fEmphasis; delete[] fChannelOrder;
 
   delete fNext;
-#ifdef SUPPORT_REAL_RTSP
-  RealReclaimSDPAttributes(this);
-#endif
 }
 
 double MediaSubsession::playStartTime() const {
@@ -670,12 +650,14 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
 	} else {
 	  fRTCPSocket = new Groupsock(env(), tempAddr, rtcpPortNum, 255);
 	}
-	if (fRTCPSocket != NULL) {
+	if (fRTCPSocket != NULL && fRTCPSocket->socketNum() >= 0) {
 	  // Success! Use these two sockets.
 	  success = True;
 	  break;
 	} else {
 	  // We couldn't create the RTCP socket (perhaps that port number's already in use elsewhere?).
+	  delete fRTCPSocket;
+
 	  // Record the first socket in our table, and keep trying:
 	  unsigned key = (unsigned)fClientPortNum;
 	  Groupsock* existing = (Groupsock*)socketHashTable->Add((char const*)key, fRTPSocket);
@@ -849,29 +831,22 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
 						 fRTPTimestampFrequency,
 						 mimeType);
 	delete[] mimeType;
-#ifdef SUPPORT_REAL_RTSP
-      } else if (strcmp(fCodecName, "X-PN-REALAUDIO") == 0 ||
-		 strcmp(fCodecName, "X-PN-MULTIRATE-REALAUDIO-LIVE") == 0 ||
-		 strcmp(fCodecName, "X-PN-REALVIDEO") == 0 ||
-		 strcmp(fCodecName, "X-PN-MULTIRATE-REALVIDEO-LIVE") == 0) {
-	// A RealNetworks 'RDT' stream (*not* a RTP stream)
-	fReadSource = RealRDTSource::createNew(env());
-	fRTPSource = NULL; // Note!
-	parentSession().isRealNetworksRDT = True;
-#endif
       } else if (  strcmp(fCodecName, "PCMU") == 0 // PCM u-law audio
 		   || strcmp(fCodecName, "GSM") == 0 // GSM audio
 		   || strcmp(fCodecName, "PCMA") == 0 // PCM a-law audio
-		   || strcmp(fCodecName, "L16") == 0 // 16-bit linear audio
 		   || strcmp(fCodecName, "MP1S") == 0 // MPEG-1 System Stream
 		   || strcmp(fCodecName, "MP2P") == 0 // MPEG-2 Program Stream
 		   || strcmp(fCodecName, "L8") == 0 // 8-bit linear audio
+		   || strcmp(fCodecName, "L16") == 0 // 16-bit linear audio
+		   || strcmp(fCodecName, "L20") == 0 // 20-bit linear audio (RFC 3190)
+		   || strcmp(fCodecName, "L24") == 0 // 24-bit linear audio (RFC 3190)
 		   || strcmp(fCodecName, "G726-16") == 0 // G.726, 16 kbps
 		   || strcmp(fCodecName, "G726-24") == 0 // G.726, 24 kbps
 		   || strcmp(fCodecName, "G726-32") == 0 // G.726, 32 kbps
 		   || strcmp(fCodecName, "G726-40") == 0 // G.726, 40 kbps
 		   || strcmp(fCodecName, "SPEEX") == 0 // SPEEX audio
 		   || strcmp(fCodecName, "T140") == 0 // T.140 text (RFC 4103)
+		   || strcmp(fCodecName, "DAT12") == 0 // 12-bit nonlinear audio (RFC 3190)
 		   ) {
 	createSimpleRTPSource = True;
 	useSpecialRTPoffset = 0;
@@ -995,10 +970,10 @@ void MediaSubsession::setDestinations(netAddressBits defaultDestAddress) {
 }
 
 double MediaSubsession::getNormalPlayTime(struct timeval const& presentationTime) {
-  // First, check whether our "RTPSource" object has already been synchronized using RTCP.
-  // If it hasn't, then - as a special case - we need to use the RTP timestamp to compute the NPT.
   if (rtpSource() == NULL || rtpSource()->timestampFrequency() == 0) return 0.0; // no RTP source, or bad freq!
 
+  // First, check whether our "RTPSource" object has already been synchronized using RTCP.
+  // If it hasn't, then - as a special case - we need to use the RTP timestamp to compute the NPT.
   if (!rtpSource()->hasBeenSynchronizedUsingRTCP()) {
     if (!rtpInfo.infoIsNew) return 0.0; // the "rtpInfo" structure has not been filled in
     u_int32_t timestampOffset = rtpSource()->curPacketRTPTimestamp() - rtpInfo.timestamp;
@@ -1014,6 +989,7 @@ double MediaSubsession::getNormalPlayTime(struct timeval const& presentationTime
     if (rtpInfo.infoIsNew) {
       // This is the first time we've been called with a synchronized presentation time since the "rtpInfo"
       // structure was last filled in.  Use this "presentationTime" to compute "fNPT_PTS_Offset":
+      if (seqNumLT(rtpSource()->curPacketRTPSeqNum(), rtpInfo.seqNum)) return -0.1; // sanity check; ignore old packets
       u_int32_t timestampOffset = rtpSource()->curPacketRTPTimestamp() - rtpInfo.timestamp;
       double nptOffset = (timestampOffset/(double)(rtpSource()->timestampFrequency()))*scale();
       double npt = playStartTime() + nptOffset;
@@ -1194,6 +1170,11 @@ Boolean MediaSubsession::parseSDPAttribute_fmtp(char const* sdpLine) {
       } else if (sscanf(sdpLine, " sprop-parameter-sets = %[^; \t\r\n]", valueStr) == 1) {
 	// Note: We used "sdpLine" here, because the value is case-sensitive.
 	delete[] fSpropParameterSets; fSpropParameterSets = strDup(valueStr);
+      } else if (sscanf(line, " emphasis = %[^; \t\r\n]", valueStr) == 1) {
+	delete[] fEmphasis; fEmphasis = strDup(valueStr);
+      } else if (sscanf(sdpLine, " channel-order = %[^; \t\r\n]", valueStr) == 1) {
+	// Note: We used "sdpLine" here, because the value is case-sensitive.
+	delete[] fChannelOrder; fChannelOrder = strDup(valueStr);
       } else {
 	// Some of the above parameters are Boolean.  Check whether the parameter
 	// names appear alone, without a "= 1" at the end:

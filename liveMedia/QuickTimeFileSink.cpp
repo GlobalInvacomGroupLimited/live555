@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // A sink that generates a QuickTime file from a composite media session
 // Implementation
 
@@ -1782,8 +1782,8 @@ addAtom(esds);
   } else if (strcmp(subsession.mediumName(), "video") == 0) {
     // MPEG-4 video
     size += addWord(0x00000000); // ???
-    size += addWord(0x03370000); // ???
-    size += addWord(0x1f042f20); // ???
+    size += addWord(0x03330000); // ???
+    size += addWord(0x1f042b20); // ???
     size += addWord(0x1104fd46); // ???
     size += addWord(0x000d4e10); // ???
     size += addWord(0x000d4e10); // ???

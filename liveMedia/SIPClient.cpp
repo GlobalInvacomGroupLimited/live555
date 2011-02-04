@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // A generic SIP client
 // Implementation
 
@@ -168,7 +168,6 @@ static char* getLine(char* startOfLine) {
 
 char* SIPClient::invite(char const* url, Authenticator* authenticator) {
   // First, check whether "url" contains a username:password to be used:
-  fInviteStatusCode = 0;
   char* username; char* password;
   if (authenticator == NULL
       && parseSIPURLUsernamePassword(url, username, password)) {
@@ -314,7 +313,6 @@ char* SIPClient::invite1(Authenticator* authenticator) {
     }
   } while (0);
 
-  fInviteStatusCode = 2;
   return NULL;
 }
 
@@ -608,8 +606,7 @@ char* SIPClient::inviteWithPassword(char const* url, char const* username,
   delete[] (char*)fUserName; fUserName = strDup(username);
   fUserNameSize = strlen(fUserName);
 
-  Authenticator authenticator;
-  authenticator.setUsernameAndPassword(username, password);
+  Authenticator authenticator(username, password);
   char* inviteResult = invite(url, &authenticator);
   if (inviteResult != NULL) {
     // We are already authorized
@@ -731,7 +728,6 @@ Boolean SIPClient::processURL(char const* url) {
     return True;
   } while (0);
 
-  fInviteStatusCode = 1;
   return False;
 }
 

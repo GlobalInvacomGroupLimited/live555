@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // Abstract class for parsing a byte stream
 // C++ header
 
@@ -76,10 +76,13 @@ protected: // we're a virtual base class
   }
 
   void getBytes(u_int8_t* to, unsigned numBytes) {
-    ensureValidBytes(numBytes);
-    memmove(to, nextToParse(), numBytes);
+    testBytes(to, numBytes);
     fCurParserIndex += numBytes;
     fRemainingUnparsedBits = 0;
+  }
+  void testBytes(u_int8_t* to, unsigned numBytes) { // as above, but doesn't advance ptr
+    ensureValidBytes(numBytes);
+    memmove(to, nextToParse(), numBytes);
   }
   void skipBytes(unsigned numBytes) {
     ensureValidBytes(numBytes);

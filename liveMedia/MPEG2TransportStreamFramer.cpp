@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // A filter that passes through (unchanged) chunks that contain an integral number
 // of MPEG-2 Transport Stream packets, but returning (in "fDurationInMicroseconds")
 // an updated estimate of the time gap between chunks.
@@ -24,15 +24,29 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #include <GroupsockHelper.hh> // for "gettimeofday()"
 
 #define TRANSPORT_PACKET_SIZE 188
+
+////////// Definitions of constants that control the behavior of this code /////////
+
+#if !defined(NEW_DURATION_WEIGHT)
 #define NEW_DURATION_WEIGHT 0.5
   // How much weight to give to the latest duration measurement (must be <= 1)
+#endif
+
+#if !defined(TIME_ADJUSTMENT_FACTOR)
 #define TIME_ADJUSTMENT_FACTOR 0.8
   // A factor by which to adjust the duration estimate to ensure that the overall
   // packet transmission times remains matched with the PCR times (which will be the
   // times that we expect receivers to play the incoming packets).
   // (must be <= 1)
+#endif
+
+#if !defined(MAX_PLAYOUT_BUFFER_DURATION)
 #define MAX_PLAYOUT_BUFFER_DURATION 0.1 // (seconds)
+#endif
+
+#if !defined(PCR_PERIOD_VARIATION_RATIO)
 #define PCR_PERIOD_VARIATION_RATIO 0.5
+#endif
 
 ////////// PIDStatus //////////
 
@@ -202,7 +216,7 @@ void MPEG2TransportStreamFramer
     // (This can produce more accurate estimates for wildly VBR streams.)
     double meanPCRPeriod = 0.0;
     if (fTSPCRCount > 0) {
-      meanPCRPeriod=(double)fTSPacketCount/fTSPCRCount;
+      meanPCRPeriod = (double)fTSPacketCount/fTSPCRCount;
       if (fTSPacketCount - pidStatus->lastPacketNum < meanPCRPeriod*PCR_PERIOD_VARIATION_RATIO) return;
     }
 

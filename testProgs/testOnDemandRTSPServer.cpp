@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2010, Live Networks, Inc.  All rights reserved
+// Copyright (c) 1996-2011, Live Networks, Inc.  All rights reserved
 // A test program that demonstrates how to stream - via unicast RTP
 // - various kinds of file on demand, using a built-in RTSP server.
 // main program
@@ -73,6 +73,20 @@ int main(int argc, char** argv) {
       = ServerMediaSession::createNew(*env, streamName, streamName,
 				      descriptionString);
     sms->addSubsession(MPEG4VideoFileServerMediaSubsession
+		       ::createNew(*env, inputFileName, reuseFirstSource));
+    rtspServer->addServerMediaSession(sms);
+
+    announceStream(rtspServer, sms, streamName, inputFileName);
+  }
+
+  // A H.264 video elementary stream:
+  {
+    char const* streamName = "h264ESVideoTest";
+    char const* inputFileName = "test.264";
+    ServerMediaSession* sms
+      = ServerMediaSession::createNew(*env, streamName, streamName,
+				      descriptionString);
+    sms->addSubsession(H264VideoFileServerMediaSubsession
 		       ::createNew(*env, inputFileName, reuseFirstSource));
     rtspServer->addServerMediaSession(sms);
 
@@ -235,6 +249,16 @@ int main(int argc, char** argv) {
     rtspServer->addServerMediaSession(sms);
 
     announceStream(rtspServer, sms, streamName, inputFileName);
+  }
+
+  // Also, attempt to create a HTTP server for RTSP-over-HTTP tunneling.
+  // Try first with the default HTTP port (80), and then with the alternative HTTP
+  // port numbers (8000 and 8080).
+
+  if (rtspServer->setUpTunnelingOverHTTP(80) || rtspServer->setUpTunnelingOverHTTP(8000) || rtspServer->setUpTunnelingOverHTTP(8080)) {
+    *env << "\n(We use port " << rtspServer->httpServerPortNum() << " for optional RTSP-over-HTTP tunneling.)\n";
+  } else {
+    *env << "\n(RTSP-over-HTTP tunneling is not available.)\n";
   }
 
   env->taskScheduler().doEventLoop(); // does not return

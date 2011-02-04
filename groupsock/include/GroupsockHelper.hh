@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "mTunnel" multicast access service
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // Helper routines to implement 'group sockets'
 // C++ header
 
@@ -31,15 +31,7 @@ int setupStreamSocket(UsageEnvironment& env,
 
 int readSocket(UsageEnvironment& env,
 	       int socket, unsigned char* buffer, unsigned bufferSize,
-	       struct sockaddr_in& fromAddress,
-	       struct timeval* timeout = NULL);
-
-int readSocketExact(UsageEnvironment& env,
-		    int socket, unsigned char* buffer, unsigned bufferSize,
-		    struct sockaddr_in& fromAddress,
-		    struct timeval* timeout = NULL);
-    // like "readSocket()", except that it rereads as many times as needed until
-    // *exactly* "bufferSize" bytes are read.
+	       struct sockaddr_in& fromAddress);
 
 Boolean writeSocket(UsageEnvironment& env,
 		    int socket, struct in_addr address, Port port,

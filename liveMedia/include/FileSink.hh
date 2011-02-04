@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // File Sinks
 // C++ header
 
@@ -37,7 +37,7 @@ public:
   //   file name suffix).  The default behavior ("oneFilePerFrame" == False)
   //   is to output all incoming data into a single file.
 
-  void addData(unsigned char* data, unsigned dataSize,
+  void addData(unsigned char const* data, unsigned dataSize,
 	       struct timeval presentationTime);
   // (Available in case a client wants to add extra data to the output file)
 

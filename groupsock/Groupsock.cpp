@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // 'Group sockets'
 // Implementation
 
@@ -237,10 +237,14 @@ void Groupsock::removeAllDestinations() {
 }
 
 void Groupsock::multicastSendOnly() {
+  // We disable this code for now, because - on some systems - leaving the multicast group seems to cause sent packets
+  // to not be received by other applications (at least, on the same host).
+#if 0
   socketLeaveGroup(env(), socketNum(), fIncomingGroupEId.groupAddress().s_addr);
   for (destRecord* dests = fDests; dests != NULL; dests = dests->fNext) {
     socketLeaveGroup(env(), socketNum(), dests->fGroupEId.groupAddress().s_addr);
   }
+#endif
 }
 
 Boolean Groupsock::output(UsageEnvironment& env, u_int8_t ttlToSend,

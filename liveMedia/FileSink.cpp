@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // File sinks
 // Implementation
 
@@ -88,7 +88,7 @@ void FileSink::afterGettingFrame(void* clientData, unsigned frameSize,
   sink->afterGettingFrame1(frameSize, presentationTime);
 }
 
-void FileSink::addData(unsigned char* data, unsigned dataSize,
+void FileSink::addData(unsigned char const* data, unsigned dataSize,
 		       struct timeval presentationTime) {
   if (fPerFrameFileNameBuffer != NULL) {
     // Special case: Open a new file on-the-fly for this frame

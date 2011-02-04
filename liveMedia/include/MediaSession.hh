@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // A data structure that represents a session that consists of
 // potentially multiple (audio and/or video) sub-sessions
 // (This data structure is used for media *receivers* - i.e., clients.
@@ -55,16 +55,6 @@ public:
 			      int useSpecialRTPoffset = -1);
       // Initiates the first subsession with the specified MIME type
       // Returns the resulting subsession, or 'multi source' (not both)
-
-#ifdef SUPPORT_REAL_RTSP
-  // Attributes specific to RealNetworks streams:
-  Boolean isRealNetworksRDT;
-  unsigned fRealFlags;
-  unsigned char* fRealTitle; unsigned fRealTitleSize;
-  unsigned char* fRealAuthor; unsigned fRealAuthorSize;
-  unsigned char* fRealCopyright; unsigned fRealCopyrightSize;
-  unsigned char* fRealAbstract; unsigned fRealAbstractSize;
-#endif
 
 protected: // redefined virtual functions
   virtual Boolean isMediaSession() const;
@@ -198,6 +188,8 @@ public:
   char const* fmtp_config() const { return fConfig; }
   char const* fmtp_mode() const { return fMode; }
   char const* fmtp_spropparametersets() const { return fSpropParameterSets; }
+  char const* fmtp_emphasis() const { return fEmphasis; }
+  char const* fmtp_channelorder() const { return fChannelOrder; }
 
   netAddressBits connectionEndpointAddress() const;
       // Converts "fConnectionEndpointName" to an address (or 0 if unknown)
@@ -228,16 +220,7 @@ public:
   // (e.g., by a "RTP-Info:" header in a RTSP response).
   // Also, for this function to work properly, the RTP stream's presentation times must (eventually) be
   // synchronized via RTCP.
-
-#ifdef SUPPORT_REAL_RTSP
-  // Attributes specific to RealNetworks streams:
-  unsigned fRealMaxBitRate, fRealAvgBitRate, fRealMaxPacketSize, fRealAvgPacketSize, fRealPreroll;
-  char* fRealStreamName; char* fRealMIMEType;
-  unsigned char* fRealOpaqueData; unsigned fRealOpaqueDataSize;
-  // A pointer into "fRealOpaqueData":
-  unsigned char* fRealTypeSpecificData; unsigned fRealTypeSpecificDataSize;
-  unsigned fRealRuleNumber;
-#endif
+  // (Note: If this function returns a negative number, then the result should be ignored by the caller.)
 
 protected:
   friend class MediaSession;
@@ -285,7 +268,7 @@ protected:
   unsigned fOctetalign, fProfile_level_id, fRobustsorting;
   unsigned fSizelength, fStreamstateindication, fStreamtype;
   Boolean fCpresent, fRandomaccessindication;
-  char *fConfig, *fMode, *fSpropParameterSets;
+  char *fConfig, *fMode, *fSpropParameterSets, *fEmphasis, *fChannelOrder;
 
   double fPlayStartTime;
   double fPlayEndTime;

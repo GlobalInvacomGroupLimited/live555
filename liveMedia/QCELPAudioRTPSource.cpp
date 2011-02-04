@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2010 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
 // Qualcomm "PureVoice" (aka. "QCELP") Audio RTP Sources
 // Implementation
 
@@ -82,6 +82,7 @@ private:
 private:
   // Redefined virtual functions:
   void doGetNextFrame();
+  virtual void doStopGettingFrames();
 
 private:
   class QCELPDeinterleavingBuffer* fDeinterleavingBuffer;
@@ -347,6 +348,11 @@ void QCELPDeinterleaver::doGetNextFrame() {
 			       afterGettingFrame, this,
 			       FramedSource::handleClosure, this);
   }
+}
+
+void QCELPDeinterleaver::doStopGettingFrames() {
+  fNeedAFrame = False;
+  fInputSource->stopGettingFrames();
 }
 
 void QCELPDeinterleaver
