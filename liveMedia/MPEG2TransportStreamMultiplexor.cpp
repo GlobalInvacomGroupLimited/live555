@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // A class for generating MPEG-2 Transport Stream from one or more input
 // Elementary Stream data sources
 // Implementation
@@ -23,8 +23,8 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 
 #define TRANSPORT_PACKET_SIZE 188
 
-#define PAT_FREQUENCY 100 // # of packets between Program Association Tables
-#define PMT_FREQUENCY 500 // # of packets between Program Map Tables
+#define PAT_PERIOD 100 // # of packets between Program Association Tables
+#define PMT_PERIOD 500 // # of packets between Program Map Tables
 
 #define PID_TABLE_SIZE 256
 
@@ -56,7 +56,7 @@ void MPEG2TransportStreamMultiplexor::doGetNextFrame() {
 
   do {
     // Periodically return a Program Association Table packet instead:
-    if (fOutgoingPacketCounter++ % PAT_FREQUENCY == 0) {
+    if (fOutgoingPacketCounter++ % PAT_PERIOD == 0) {
       deliverPATPacket();
       break;
     }
@@ -64,7 +64,7 @@ void MPEG2TransportStreamMultiplexor::doGetNextFrame() {
     // Periodically (or when we see a new PID) return a Program Map Table instead:
     Boolean programMapHasChanged = fPIDState[fCurrentPID].counter == 0
       || fCurrentInputProgramMapVersion != fPreviousInputProgramMapVersion;
-    if (fOutgoingPacketCounter % PMT_FREQUENCY == 0 || programMapHasChanged) {
+    if (fOutgoingPacketCounter % PMT_PERIOD == 0 || programMapHasChanged) {
       if (programMapHasChanged) { // reset values for next time:
 	fPIDState[fCurrentPID].counter = 1;
 	fPreviousInputProgramMapVersion = fCurrentInputProgramMapVersion;
@@ -80,7 +80,13 @@ void MPEG2TransportStreamMultiplexor::doGetNextFrame() {
 
   // NEED TO SET fPresentationTime, durationInMicroseconds #####
   // Complete the delivery to the client:
-  afterGetting(this);
+  if ((fOutgoingPacketCounter%10) == 0) {
+    // To avoid excessive recursion (and stack overflow) caused by excessively large input frames,
+    // occasionally return to the event loop to do this:
+    envir().taskScheduler().scheduleDelayedTask(0, (TaskFunc*)FramedSource::afterGetting, this);
+  } else {
+    afterGetting(this);
+  }
 }
 
 void MPEG2TransportStreamMultiplexor
@@ -231,7 +237,7 @@ static u_int32_t calculateCRC(u_int8_t* data, unsigned dataLength); // forward
 
 #define PAT_PID 0
 #define OUR_PROGRAM_NUMBER 1
-#define OUR_PROGRAM_MAP_PID 0x10
+#define OUR_PROGRAM_MAP_PID 0x30
 
 void MPEG2TransportStreamMultiplexor::deliverPATPacket() {
   // First, create a new buffer for the PAT packet:
@@ -353,7 +359,7 @@ void MPEG2TransportStreamMultiplexor::setProgramStreamMap(unsigned frameSize) {
   }
 }
 
-static u_int32_t CRC32[256] = {
+static u_int32_t const CRC32[256] = {
   0x00000000, 0x04c11db7, 0x09823b6e, 0x0d4326d9,
   0x130476dc, 0x17c56b6b, 0x1a864db2, 0x1e475005,
   0x2608edb8, 0x22c9f00f, 0x2f8ad6d6, 0x2b4bcb61,

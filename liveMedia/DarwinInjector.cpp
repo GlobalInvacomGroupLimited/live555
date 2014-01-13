@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // An object that redirects one or more RTP/RTCP streams - forming a single
 // multimedia session - into a 'Darwin Streaming Server' (for subsequent
 // reflection to potentially arbitrarily many remote RTSP clients).
@@ -72,7 +72,7 @@ DarwinInjector::DarwinInjector(UsageEnvironment& env,
   : Medium(env),
     fApplicationName(strDup(applicationName)), fVerbosityLevel(verbosityLevel),
     fRTSPClient(NULL), fSubstreamSDPSizes(0),
-    fHeadSubstream(NULL), fTailSubstream(NULL), fSession(NULL), fLastTrackId(0) {
+    fHeadSubstream(NULL), fTailSubstream(NULL), fSession(NULL), fLastTrackId(0), fResultString(NULL) {
 }
 
 DarwinInjector::~DarwinInjector() {
@@ -105,7 +105,7 @@ class RTSPClientForDarwinInjector: public RTSPClient {
 public:
   RTSPClientForDarwinInjector(UsageEnvironment& env, char const* rtspURL, int verbosityLevel, char const* applicationName,
 			      DarwinInjector* ourDarwinInjector)
-    : RTSPClient(env, rtspURL, verbosityLevel, applicationName, 0),
+    : RTSPClient(env, rtspURL, verbosityLevel, applicationName, 0, -1),
       fOurDarwinInjector(ourDarwinInjector) {}
   virtual ~RTSPClientForDarwinInjector() {}
   DarwinInjector* fOurDarwinInjector;
@@ -146,7 +146,7 @@ Boolean DarwinInjector
       NetAddress const* address = addresses.firstAddress();
       addr.s_addr = *(unsigned*)(address->data());
     }
-    char const* remoteRTSPServerAddressStr = our_inet_ntoa(addr);
+    AddressString remoteRTSPServerAddressStr(addr);
 
     // Construct a SDP description for the session that we'll be streaming:
     char const* const sdpFmt =
@@ -166,21 +166,21 @@ Boolean DarwinInjector
       + 20 /* max int len */ + 20 /* max int len */
       + strlen(sessionName)
       + strlen(sessionInfo)
-      + strlen(remoteRTSPServerAddressStr)
+      + strlen(remoteRTSPServerAddressStr.val())
       + strlen(sessionName)
       + strlen(sessionInfo)
       + strlen(fApplicationName)
       + strlen(sessionAuthor)
       + strlen(sessionCopyright)
       + fSubstreamSDPSizes;
-    unsigned const sdpSessionId = our_random();
+    unsigned const sdpSessionId = our_random32();
     unsigned const sdpVersion = sdpSessionId;
     sdp = new char[sdpLen];
     sprintf(sdp, sdpFmt,
 	    sdpSessionId, sdpVersion, // o= line
 	    sessionName, // s= line
 	    sessionInfo, // i= line
-	    remoteRTSPServerAddressStr, // c= line
+	    remoteRTSPServerAddressStr.val(), // c= line
 	    sessionName, // a=x-qt-text-nam: line
 	    sessionInfo, // a=x-qt-text-inf: line
 	    fApplicationName, // a=x-qt-text-cmt: line

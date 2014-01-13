@@ -14,14 +14,14 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // A filter for converting one or more MPEG Elementary Streams
 // to a MPEG-2 Transport Stream
 // Implementation
 
 #include "MPEG2TransportStreamFromESSource.hh"
 
-#define MAX_INPUT_ES_FRAME_SIZE 50000
+#define MAX_INPUT_ES_FRAME_SIZE 100000
 #define SIMPLE_PES_HEADER_SIZE 14
 #define LOW_WATER_MARK 1000 // <= MAX_INPUT_ES_FRAME_SIZE
 #define INPUT_BUFFER_SIZE (SIMPLE_PES_HEADER_SIZE + 2*MAX_INPUT_ES_FRAME_SIZE)
@@ -99,6 +99,7 @@ MPEG2TransportStreamFromESSource
 }
 
 MPEG2TransportStreamFromESSource::~MPEG2TransportStreamFromESSource() {
+  doStopGettingFrames();
   delete fInputSources;
 }
 

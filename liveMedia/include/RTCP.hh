@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // RTCP
 // C++ header
 
@@ -68,6 +68,7 @@ public:
       // called if some other multicast receiver happens to exit.
       // If "handleActiveParticipantsOnly" is False, then the handler is called
       // for any incoming RTCP "BYE".
+      // (To remove an existing "BYE" handler, call "setByeHandler()" again, with a "handlerTask" of NULL.)
   void setSRHandler(TaskFunc* handlerTask, void* clientData);
   void setRRHandler(TaskFunc* handlerTask, void* clientData);
       // Assigns a handler routine to be called if a "SR" or "RR"
@@ -79,6 +80,7 @@ public:
       // Like "setRRHandler()", but applies only to "RR" packets that come from
       // a specific source address and port.  (Note that if both a specific
       // and a general "RR" handler function is set, then both will be called.)
+  void unsetSpecificRRHandler(netAddressBits fromAddress, Port fromPort); // equivalent to setSpecificRRHandler(..., NULL, NULL);
 
   Groupsock* RTCPgs() const { return fRTCPInterface.gs(); }
 
@@ -108,7 +110,7 @@ private:
   virtual Boolean isRTCPInstance() const;
 
 private:
-  void addReport();
+  Boolean addReport(Boolean alwaysAdd = False);
     void addSR();
     void addRR();
       void enqueueCommonReportPrefix(unsigned char packetType, u_int32_t SSRC,
@@ -126,8 +128,6 @@ private:
   static void incomingReportHandler(RTCPInstance* instance, int /*mask*/);
   void incomingReportHandler1();
   void onReceive(int typeOfPacket, int totPacketSize, u_int32_t ssrc);
-
-  void unsetSpecificRRHandler(netAddressBits fromAddress, Port fromPort);
 
 private:
   unsigned char* fInBuf;

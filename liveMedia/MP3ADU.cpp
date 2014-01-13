@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // 'ADU' MP3 streams (for improved loss-tolerance)
 // Implementation
 
@@ -277,8 +277,7 @@ MP3FromADUSource::MP3FromADUSource(UsageEnvironment& env,
   : FramedFilter(env, inputSource),
     fAreEnqueueingADU(False),
     fSegments(new SegmentQueue(False /* because we're ADU->MP3 */,
-			       includeADUdescriptors)),
-    fIncludeADUdescriptors(includeADUdescriptors) {
+			       includeADUdescriptors)) {
 }
 
 MP3FromADUSource::~MP3FromADUSource() {

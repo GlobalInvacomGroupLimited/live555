@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // Framed Sources
 // Implementation
 
@@ -102,15 +102,17 @@ void FramedSource::handleClosure(void* clientData) {
 
 void FramedSource::stopGettingFrames() {
   fIsCurrentlyAwaitingData = False; // indicates that we can be read again
+  fAfterGettingFunc = NULL;
+  fOnCloseFunc = NULL;
 
   // Perform any specialized action now:
   doStopGettingFrames();
 }
 
 void FramedSource::doStopGettingFrames() {
-  // Default implementation: Do nothing
-  // Subclasses may wish to specialize this so as to ensure that a
-  // subsequent reader can pick up where this one left off.
+  // Default implementation: Do nothing except cancel any pending 'delivery' task:
+  envir().taskScheduler().unscheduleDelayedTask(nextTask());
+  // Subclasses may wish to redefine this function.
 }
 
 unsigned FramedSource::maxFrameSize() const {

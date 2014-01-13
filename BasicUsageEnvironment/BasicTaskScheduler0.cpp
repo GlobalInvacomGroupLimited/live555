@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // Basic Usage Environment: for a simple, non-scripted, console application
 // Implementation
 
@@ -68,7 +68,7 @@ TaskToken BasicTaskScheduler0::scheduleDelayedTask(int64_t microseconds,
 }
 
 void BasicTaskScheduler0::unscheduleDelayedTask(TaskToken& prevTask) {
-  DelayQueueEntry* alarmHandler = fDelayQueue.removeEntry((long)prevTask);
+  DelayQueueEntry* alarmHandler = fDelayQueue.removeEntry((intptr_t)prevTask);
   prevTask = NULL;
   delete alarmHandler;
 }
@@ -127,20 +127,13 @@ void BasicTaskScheduler0::deleteEventTrigger(EventTriggerId eventTriggerId) {
 }
 
 void BasicTaskScheduler0::triggerEvent(EventTriggerId eventTriggerId, void* clientData) {
-  // First, record the "clientData":
-  if (eventTriggerId == fLastUsedTriggerMask) { // common-case optimization:
-    fTriggeredEventClientDatas[fLastUsedTriggerNum] = clientData;
-  } else {
-    EventTriggerId mask = 0x80000000;
-    for (unsigned i = 0; i < MAX_NUM_EVENT_TRIGGERS; ++i) {
-      if ((eventTriggerId&mask) != 0) {
-	fTriggeredEventClientDatas[i] = clientData;
-
-	fLastUsedTriggerMask = mask;
-	fLastUsedTriggerNum = i;
-      }
-      mask >>= 1;
+  // First, record the "clientData".  (Note that we allow "eventTriggerId" to be a combination of bits for multiple events.)
+  EventTriggerId mask = 0x80000000;
+  for (unsigned i = 0; i < MAX_NUM_EVENT_TRIGGERS; ++i) {
+    if ((eventTriggerId&mask) != 0) {
+      fTriggeredEventClientDatas[i] = clientData;
     }
+    mask >>= 1;
   }
 
   // Then, note this event as being ready to be handled.

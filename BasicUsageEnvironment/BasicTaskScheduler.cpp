@@ -13,7 +13,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
-// Copyright (c) 1996-2011 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
 // Basic Usage Environment: for a simple, non-scripted, console application
 // Implementation
 
@@ -28,25 +28,28 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 
 ////////// BasicTaskScheduler //////////
 
-BasicTaskScheduler* BasicTaskScheduler::createNew() {
-	return new BasicTaskScheduler();
+BasicTaskScheduler* BasicTaskScheduler::createNew(unsigned maxSchedulerGranularity) {
+	return new BasicTaskScheduler(maxSchedulerGranularity);
 }
 
-#define MAX_SCHEDULER_GRANULARITY 10000 // 10 microseconds: We will return to the event loop at least this often
-static void schedulerTickTask(void* clientData) {
-  ((BasicTaskScheduler*)clientData)->scheduleDelayedTask(MAX_SCHEDULER_GRANULARITY, schedulerTickTask, clientData);
-}
-
-BasicTaskScheduler::BasicTaskScheduler()
-  : fMaxNumSockets(0) {
+BasicTaskScheduler::BasicTaskScheduler(unsigned maxSchedulerGranularity)
+  : fMaxSchedulerGranularity(maxSchedulerGranularity), fMaxNumSockets(0) {
   FD_ZERO(&fReadSet);
   FD_ZERO(&fWriteSet);
   FD_ZERO(&fExceptionSet);
 
-  schedulerTickTask(this); // ensures that we handle events frequently
+  if (maxSchedulerGranularity > 0) schedulerTickTask(); // ensures that we handle events frequently
 }
 
 BasicTaskScheduler::~BasicTaskScheduler() {
+}
+
+void BasicTaskScheduler::schedulerTickTask(void* clientData) {
+  ((BasicTaskScheduler*)clientData)->schedulerTickTask();
+}
+
+void BasicTaskScheduler::schedulerTickTask() {
+  scheduleDelayedTask(fMaxSchedulerGranularity, schedulerTickTask, this);
 }
 
 #ifndef MILLION
@@ -88,8 +91,6 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
       // To stop this from happening again, create a dummy socket:
       int dummySocketNum = socket(AF_INET, SOCK_DGRAM, 0);
       FD_SET((unsigned)dummySocketNum, &fReadSet);
-      FD_SET((unsigned)dummySocketNum, &fWriteSet);
-      FD_SET((unsigned)dummySocketNum, &fExceptionSet);
     }
     if (err != EINTR) {
 #else
@@ -98,6 +99,20 @@ void BasicTaskScheduler::SingleStep(unsigned maxDelayTime) {
 	// Unexpected error - treat this as fatal:
 #if !defined(_WIN32_WCE)
 	perror("BasicTaskScheduler::SingleStep(): select() fails");
+	// Because this failure is often "Bad file descriptor" - which is caused by an invalid socket number (i.e., a socket number
+	// that had already been closed) being used in "select()" - we print out the sockets that were being used in "select()",
+	// to assist in debugging:
+	fprintf(stderr, "socket numbers used in the select() call:");
+	for (int i = 0; i < 10000; ++i) {
+	  if (FD_ISSET(i, &fReadSet) || FD_ISSET(i, &fWriteSet) || FD_ISSET(i, &fExceptionSet)) {
+	    fprintf(stderr, " %d(", i);
+	    if (FD_ISSET(i, &fReadSet)) fprintf(stderr, "r");
+	    if (FD_ISSET(i, &fWriteSet)) fprintf(stderr, "w");
+	    if (FD_ISSET(i, &fExceptionSet)) fprintf(stderr, "e");
+	    fprintf(stderr, ")");
+	  }
+	}
+	fprintf(stderr, "\n");
 #endif
 	internalError();
       }
