@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // RTP sink for H.265 video
 // Implementation
 
@@ -115,18 +115,31 @@ char const* H265VideoRTPSink::auxSDPLine() {
     if (framerSource == NULL) return NULL; // we don't yet have a source
 
     framerSource->getVPSandSPSandPPS(vps, vpsSize, sps, spsSize, pps, ppsSize);
-    if (vps == NULL || sps == NULL || pps == NULL) return NULL; // our source isn't ready
+    if (vps == NULL || sps == NULL || pps == NULL) {
+      return NULL; // our source isn't ready
+    }
   }
 
   // Set up the "a=fmtp:" SDP line for this stream.
-  // First, extract from our 'profile_tier_level' bytes (that were set by our upstream 'framer')
-  // several parameters that we'll put in this line:
-  u_int8_t const* profileTierLevelHeaderBytes = framerSource->profileTierLevelHeaderBytes();
-  unsigned profile_space = profileTierLevelHeaderBytes[0]>>6; // general_profile_space
-  unsigned profile_id = profileTierLevelHeaderBytes[0]&0x1F; // general_profile_idc
-  unsigned tier_flag = (profileTierLevelHeaderBytes[0]>>5)&0x1; // general_tier_flag
-  unsigned level_id = profileTierLevelHeaderBytes[11]; // general_level_idc
+  u_int8_t* vpsWEB = new u_int8_t[vpsSize]; // "WEB" means "Without Emulation Bytes"
+  unsigned vpsWEBSize = removeH264or5EmulationBytes(vpsWEB, vpsSize, vps, vpsSize);
+  if (vpsWEBSize < 6/*'profile_tier_level' offset*/ + 12/*num 'profile_tier_level' bytes*/) {
+    // Bad VPS size => assume our source isn't ready
+    delete[] vpsWEB;
+    return NULL;
+  }
+  u_int8_t const* profileTierLevelHeaderBytes = &vpsWEB[6];
+  unsigned profileSpace  = profileTierLevelHeaderBytes[0]>>6; // general_profile_space
+  unsigned profileId = profileTierLevelHeaderBytes[0]&0x1F; // general_profile_idc
+  unsigned tierFlag = (profileTierLevelHeaderBytes[0]>>5)&0x1; // general_tier_flag
+  unsigned levelId = profileTierLevelHeaderBytes[11]; // general_level_idc
   u_int8_t const* interop_constraints = &profileTierLevelHeaderBytes[5];
+  char interopConstraintsStr[100];
+  sprintf(interopConstraintsStr, "%02X%02X%02X%02X%02X%02X", 
+	  interop_constraints[0], interop_constraints[1], interop_constraints[2],
+	  interop_constraints[3], interop_constraints[4], interop_constraints[5]);
+  delete[] vpsWEB;
+
   char* sprop_vps = base64Encode((char*)vps, vpsSize);
   char* sprop_sps = base64Encode((char*)sps, spsSize);
   char* sprop_pps = base64Encode((char*)pps, ppsSize);
@@ -136,31 +149,30 @@ char const* H265VideoRTPSink::auxSDPLine() {
     ";profile-id=%u"
     ";tier-flag=%u"
     ";level-id=%u"
-    ";interop-constraints=%02X%02X%02X%02X%02X%02X"
-    ";tx-mode=SST"
+    ";interop-constraints=%s"
     ";sprop-vps=%s"
     ";sprop-sps=%s"
     ";sprop-pps=%s\r\n";
   unsigned fmtpFmtSize = strlen(fmtpFmt)
-    + 3 /* max num chars: rtpPayloadType */ + 1 /* num chars: profile_space */
-    + 2 /* max num chars: profile_id */
-    + 1 /* num chars: tier_flag */
-    + 3 /* max num chars: level_id */
-    + 12 /* num chars: interop_constraints */
+    + 3 /* max num chars: rtpPayloadType */ + 20 /* max num chars: profile_space */
+    + 20 /* max num chars: profile_id */
+    + 20 /* max num chars: tier_flag */
+    + 20 /* max num chars: level_id */
+    + strlen(interopConstraintsStr)
     + strlen(sprop_vps)
     + strlen(sprop_sps)
     + strlen(sprop_pps);
   char* fmtp = new char[fmtpFmtSize];
   sprintf(fmtp, fmtpFmt,
-          rtpPayloadType(), profile_space,
-	  profile_id,
-	  tier_flag,
-	  level_id,
-	  interop_constraints[0], interop_constraints[1], interop_constraints[2],
-	  interop_constraints[3], interop_constraints[4], interop_constraints[5],
+          rtpPayloadType(), profileSpace,
+	  profileId,
+	  tierFlag,
+	  levelId,
+	  interopConstraintsStr,
 	  sprop_vps,
 	  sprop_sps,
 	  sprop_pps);
+
   delete[] sprop_vps;
   delete[] sprop_sps;
   delete[] sprop_pps;

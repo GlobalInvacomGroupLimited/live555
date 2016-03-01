@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // A data structure that represents a session that consists of
 // potentially multiple (audio and/or video) sub-sessions
 // Implementation
@@ -61,8 +61,8 @@ MediaSession::MediaSession(UsageEnvironment& env)
     fSubsessionsHead(NULL), fSubsessionsTail(NULL),
     fConnectionEndpointName(NULL),
     fMaxPlayStartTime(0.0f), fMaxPlayEndTime(0.0f), fAbsStartTime(NULL), fAbsEndTime(NULL),
-    fScale(1.0f), fMediaSessionType(NULL), fSessionName(NULL), fSessionDescription(NULL),
-    fControlPath(NULL) {
+    fScale(1.0f), fSpeed(1.0f),
+    fMediaSessionType(NULL), fSessionName(NULL), fSessionDescription(NULL), fControlPath(NULL) {
   fSourceFilterAddr.s_addr = 0;
 
   // Get our host name, and use this for the RTCP CNAME:
@@ -206,6 +206,7 @@ Boolean MediaSession::initializeWithSDP(char const* sdpDescription) {
       if (subsession->parseSDPLine_c(sdpLine)) continue;
       if (subsession->parseSDPLine_b(sdpLine)) continue;
       if (subsession->parseSDPAttribute_rtpmap(sdpLine)) continue;
+      if (subsession->parseSDPAttribute_rtcpmux(sdpLine)) continue;
       if (subsession->parseSDPAttribute_control(sdpLine)) continue;
       if (subsession->parseSDPAttribute_range(sdpLine)) continue;
       if (subsession->parseSDPAttribute_fmtp(sdpLine)) continue;
@@ -569,6 +570,27 @@ void MediaSubsessionIterator::reset() {
   fNextPtr = fOurSession.fSubsessionsHead;
 }
 
+
+////////// SDPAttribute definition //////////
+
+class SDPAttribute {
+public:
+  SDPAttribute(char const* strValue, Boolean valueIsHexadecimal);
+  virtual ~SDPAttribute();
+
+  char const* strValue() const { return fStrValue; }
+  char const* strValueToLower() const { return fStrValueToLower; }
+  int intValue() const { return fIntValue; }
+  Boolean valueIsHexadecimal() const { return fValueIsHexadecimal; }
+
+private:
+  char* fStrValue;
+  char* fStrValueToLower;
+  int fIntValue;
+  Boolean fValueIsHexadecimal;
+};
+
+
 ////////// MediaSubsession //////////
 
 MediaSubsession::MediaSubsession(MediaSession& parent)
@@ -577,22 +599,24 @@ MediaSubsession::MediaSubsession(MediaSession& parent)
     fConnectionEndpointName(NULL),
     fClientPortNum(0), fRTPPayloadFormat(0xFF),
     fSavedSDPLines(NULL), fMediumName(NULL), fCodecName(NULL), fProtocolName(NULL),
-    fRTPTimestampFrequency(0), fControlPath(NULL),
+    fRTPTimestampFrequency(0), fMultiplexRTCPWithRTP(False), fControlPath(NULL),
     fSourceFilterAddr(parent.sourceFilterAddr()), fBandwidth(0),
-    fAuxiliarydatasizelength(0), fConstantduration(0), fConstantsize(0),
-    fCRC(0), fCtsdeltalength(0), fDe_interleavebuffersize(0), fDtsdeltalength(0),
-    fIndexdeltalength(0), fIndexlength(0), fInterleaving(0), fMaxdisplacement(0),
-    fObjecttype(0), fOctetalign(0), fProfile_level_id(0), fRobustsorting(0),
-    fSizelength(0), fStreamstateindication(0), fStreamtype(0),
-    fCpresent(False), fRandomaccessindication(False),
-    fConfig(NULL), fMode(NULL), fSpropParameterSets(NULL), fEmphasis(NULL), fChannelOrder(NULL),
     fPlayStartTime(0.0), fPlayEndTime(0.0), fAbsStartTime(NULL), fAbsEndTime(NULL),
     fVideoWidth(0), fVideoHeight(0), fVideoFPS(0), fNumChannels(1), fScale(1.0f), fNPT_PTS_Offset(0.0f),
+    fAttributeTable(HashTable::create(STRING_HASH_KEYS)),
     fRTPSocket(NULL), fRTCPSocket(NULL),
     fRTPSource(NULL), fRTCPInstance(NULL), fReadSource(NULL),
     fReceiveRawMP3ADUs(False), fReceiveRawJPEGFrames(False),
     fSessionId(NULL) {
   rtpInfo.seqNum = 0; rtpInfo.timestamp = 0; rtpInfo.infoIsNew = False;
+
+  // A few attributes have unusual default values.  Set these now:
+  setAttribute("profile-level-id", "0", True/*value is hexadecimal*/); // used with "video/H264"
+    // This won't work for MPEG-4 (unless the value is <10), because for MPEG-4, the value
+    // is assumed to be a decimal string, not a hexadecimal string.  NEED TO FIX #####
+  setAttribute("profile-id", "1"); // used with "video/H265"
+  setAttribute("level-id", "93"); // used with "video/H265"
+  setAttribute("interop-constraints", "B00000000000"); // used with "video/H265"
 }
 
 MediaSubsession::~MediaSubsession() {
@@ -601,15 +625,20 @@ MediaSubsession::~MediaSubsession() {
   delete[] fConnectionEndpointName; delete[] fSavedSDPLines;
   delete[] fMediumName; delete[] fCodecName; delete[] fProtocolName;
   delete[] fControlPath;
-  delete[] fConfig; delete[] fMode; delete[] fSpropParameterSets; delete[] fEmphasis; delete[] fChannelOrder;
   delete[] fAbsStartTime; delete[] fAbsEndTime;
   delete[] fSessionId;
+
+  // Empty and delete our 'attributes table':
+  SDPAttribute* attr;
+  while ((attr = (SDPAttribute*)fAttributeTable->RemoveNext()) != NULL) {
+    delete attr;
+  }
+  delete fAttributeTable;
 
   delete fNext;
 }
 
 void MediaSubsession::addFilter(FramedFilter* filter){
-  if (filter == NULL || filter->inputSource() != fReadSource) return; // sanity check
   fReadSource = filter;
 }
 
@@ -662,7 +691,7 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
     if (fClientPortNum != 0 && (honorSDPPortChoice || IsMulticastAddress(tempAddr.s_addr))) {
       // The sockets' port numbers were specified for us.  Use these:
       Boolean const protocolIsRTP = strcmp(fProtocolName, "RTP") == 0;
-      if (protocolIsRTP) {
+      if (protocolIsRTP && !fMultiplexRTCPWithRTP) {
 	fClientPortNum = fClientPortNum&~1;
 	    // use an even-numbered port for RTP, and the next (odd-numbered) port for RTCP
       }
@@ -677,17 +706,24 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
       }
       
       if (protocolIsRTP) {
-	// Set our RTCP port to be the RTP port +1
-	portNumBits const rtcpPortNum = fClientPortNum|1;
-	if (isSSM()) {
-	  fRTCPSocket = new Groupsock(env(), tempAddr, fSourceFilterAddr, rtcpPortNum);
+	if (fMultiplexRTCPWithRTP) {
+	  // Use the RTP 'groupsock' object for RTCP as well:
+	  fRTCPSocket = fRTPSocket;
 	} else {
-	  fRTCPSocket = new Groupsock(env(), tempAddr, rtcpPortNum, 255);
+	  // Set our RTCP port to be the RTP port + 1:
+	  portNumBits const rtcpPortNum = fClientPortNum|1;
+	  if (isSSM()) {
+	    fRTCPSocket = new Groupsock(env(), tempAddr, fSourceFilterAddr, rtcpPortNum);
+	  } else {
+	    fRTCPSocket = new Groupsock(env(), tempAddr, rtcpPortNum, 255);
+	  }
 	}
       }
     } else {
       // Port numbers were not specified in advance, so we use ephemeral port numbers.
       // Create sockets until we get a port-number pair (even: RTP; even+1: RTCP).
+      // (However, if we're multiplexing RTCP with RTP, then we create only one socket,
+      // and the port number  can be even or odd.)
       // We need to make sure that we don't keep trying to use the same bad port numbers over
       // and over again, so we store bad sockets in a table, and delete them all when we're done.
       HashTable* socketHashTable = HashTable::create(ONE_WORD_HASH_KEYS);
@@ -708,12 +744,21 @@ Boolean MediaSubsession::initiate(int useSpecialRTPoffset) {
 	  break;
 	}
 
-	// Get the client port number, and check whether it's even (for RTP):
+	// Get the client port number:
 	Port clientPort(0);
 	if (!getSourcePort(env(), fRTPSocket->socketNum(), clientPort)) {
 	  break;
 	}
 	fClientPortNum = ntohs(clientPort.num()); 
+
+	if (fMultiplexRTCPWithRTP) {
+	  // Use this RTP 'groupsock' object for RTCP as well:
+	  fRTCPSocket = fRTPSocket;
+	  success = True;
+	  break;
+	}	  
+
+	// To be usable for RTP, the client port number must be even:
 	if ((fClientPortNum&1) != 0) { // it's odd
 	  // Record this socket in our table, and keep trying:
 	  unsigned key = (unsigned)fClientPortNum;
@@ -807,8 +852,9 @@ void MediaSubsession::deInitiate() {
   Medium::close(fReadSource); // this is assumed to also close fRTPSource
   fReadSource = NULL; fRTPSource = NULL;
 
-  delete fRTPSocket; fRTPSocket = NULL;
-  delete fRTCPSocket; fRTCPSocket = NULL;
+  delete fRTPSocket;
+  if (fRTCPSocket != fRTPSocket) delete fRTCPSocket;
+  fRTPSocket = NULL; fRTCPSocket = NULL;
 }
 
 Boolean MediaSubsession::setClientPortNum(unsigned short portNum) {
@@ -819,6 +865,34 @@ Boolean MediaSubsession::setClientPortNum(unsigned short portNum) {
 
   fClientPortNum = portNum;
   return True;
+}
+
+char const* MediaSubsession::attrVal_str(char const* attrName) const {
+  SDPAttribute* attr = (SDPAttribute*)(fAttributeTable->Lookup(attrName));
+  if (attr == NULL) return "";
+
+  return attr->strValue();
+}
+
+char const* MediaSubsession::attrVal_strToLower(char const* attrName) const {
+  SDPAttribute* attr = (SDPAttribute*)(fAttributeTable->Lookup(attrName));
+  if (attr == NULL) return "";
+
+  return attr->strValueToLower();
+}
+
+unsigned MediaSubsession::attrVal_int(char const* attrName) const {
+  SDPAttribute* attr = (SDPAttribute*)(fAttributeTable->Lookup(attrName));
+  if (attr == NULL) return 0;
+
+  return attr->intValue();
+}
+
+char const* MediaSubsession::fmtp_config() const {
+  char const* result = attrVal_str("config");
+  if (result[0] == '\0') result = attrVal_str("configuration");
+
+  return result;
 }
 
 netAddressBits MediaSubsession::connectionEndpointAddress() const {
@@ -855,7 +929,7 @@ void MediaSubsession::setDestinations(netAddressBits defaultDestAddress) {
     Port destPort(serverPortNum);
     fRTPSocket->changeDestinationParameters(destAddr, destPort, destTTL);
   }
-  if (fRTCPSocket != NULL && !isSSM()) {
+  if (fRTCPSocket != NULL && !isSSM() && !fMultiplexRTCPWithRTP) {
     // Note: For SSM sessions, the dest address for RTCP was already set.
     Port destPort(serverPortNum+1);
     fRTCPSocket->changeDestinationParameters(destAddr, destPort, destTTL);
@@ -901,6 +975,21 @@ double MediaSubsession::getNormalPlayTime(struct timeval const& presentationTime
       return (double)(ptsDouble*scale() + fNPT_PTS_Offset);
     }
   }
+}
+
+void MediaSubsession
+::setAttribute(char const* name, char const* value, Boolean valueIsHexadecimal) {
+  // Replace any existing attribute record with this name (except that the 'valueIsHexadecimal'
+  // property will be inherited from it, if it exists).
+  SDPAttribute* oldAttr = (SDPAttribute*)fAttributeTable->Lookup(name);
+  if (oldAttr != NULL) {
+    valueIsHexadecimal = oldAttr->valueIsHexadecimal();
+    fAttributeTable->Remove(name);
+    delete oldAttr;
+  }
+
+  SDPAttribute* newAttr = new SDPAttribute(value, valueIsHexadecimal);
+  (void)fAttributeTable->Add(name, newAttr);
 }
 
 Boolean MediaSubsession::parseSDPLine_c(char const* sdpLine) {
@@ -959,6 +1048,15 @@ Boolean MediaSubsession::parseSDPAttribute_rtpmap(char const* sdpLine) {
   return parseSuccess;
 }
 
+Boolean MediaSubsession::parseSDPAttribute_rtcpmux(char const* sdpLine) {
+  if (strncmp(sdpLine, "a=rtcp-mux", 10) == 0) {
+    fMultiplexRTCPWithRTP = True;
+    return True;
+  }
+
+  return False;
+}
+
 Boolean MediaSubsession::parseSDPAttribute_control(char const* sdpLine) {
   // Check for a "a=control:<control-path>" line:
   Boolean parseSuccess = False;
@@ -1003,116 +1101,42 @@ Boolean MediaSubsession::parseSDPAttribute_range(char const* sdpLine) {
 
 Boolean MediaSubsession::parseSDPAttribute_fmtp(char const* sdpLine) {
   // Check for a "a=fmtp:" line:
-  // TEMP: We check only for a handful of expected parameter names #####
-  // Later: (i) check that payload format number matches; #####
-  //        (ii) look for other parameters also (generalize?) #####
+  // Later: Check that payload format number matches; #####
   do {
     if (strncmp(sdpLine, "a=fmtp:", 7) != 0) break; sdpLine += 7;
     while (isdigit(*sdpLine)) ++sdpLine;
 
     // The remaining "sdpLine" should be a sequence of
     //     <name>=<value>;
+    // or
+    //     <name>;
     // parameter assignments.  Look at each of these.
-    // First, convert the line to lower-case, to ease comparison:
-    char* const lineCopy = strDup(sdpLine); char* line = lineCopy;
-    {
-      Locale l("POSIX");
-      for (char* c = line; *c != '\0'; ++c) *c = tolower(*c);
-    }
-    while (*line != '\0' && *line != '\r' && *line != '\n') {
-      unsigned u;
-      char* valueStr = strDupSize(line);
-      if (sscanf(line, " auxiliarydatasizelength = %u", &u) == 1) {
-	fAuxiliarydatasizelength = u;
-      } else if (sscanf(line, " constantduration = %u", &u) == 1) {
-	fConstantduration = u;
-      } else if (sscanf(line, " constantsize; = %u", &u) == 1) {
-	fConstantsize = u;
-      } else if (sscanf(line, " crc = %u", &u) == 1) {
-	fCRC = u;
-      } else if (sscanf(line, " ctsdeltalength = %u", &u) == 1) {
-	fCtsdeltalength = u;
-      } else if (sscanf(line, " de-interleavebuffersize = %u", &u) == 1) {
-	fDe_interleavebuffersize = u;
-      } else if (sscanf(line, " dtsdeltalength = %u", &u) == 1) {
-	fDtsdeltalength = u;
-      } else if (sscanf(line, " indexdeltalength = %u", &u) == 1) {
-	fIndexdeltalength = u;
-      } else if (sscanf(line, " indexlength = %u", &u) == 1) {
-	fIndexlength = u;
-      } else if (sscanf(line, " interleaving = %u", &u) == 1) {
-	fInterleaving = u;
-      } else if (sscanf(line, " maxdisplacement = %u", &u) == 1) {
-	fMaxdisplacement = u;
-      } else if (sscanf(line, " objecttype = %u", &u) == 1) {
-	fObjecttype = u;
-      } else if (sscanf(line, " octet-align = %u", &u) == 1) {
-	fOctetalign = u;
-      } else if (sscanf(line, " profile-level-id = %x", &u) == 1) {
-	// Note that the "profile-level-id" parameter is assumed to be hexadecimal
-	fProfile_level_id = u;
-      } else if (sscanf(line, " robust-sorting = %u", &u) == 1) {
-	fRobustsorting = u;
-      } else if (sscanf(line, " sizelength = %u", &u) == 1) {
-	fSizelength = u;
-      } else if (sscanf(line, " streamstateindication = %u", &u) == 1) {
-	fStreamstateindication = u;
-      } else if (sscanf(line, " streamtype = %u", &u) == 1) {
-	fStreamtype = u;
-      } else if (sscanf(line, " cpresent = %u", &u) == 1) {
-	fCpresent = u != 0;
-      } else if (sscanf(line, " randomaccessindication = %u", &u) == 1) {
-	fRandomaccessindication = u != 0;
-      } else if (sscanf(sdpLine, " config = %[^; \t\r\n]", valueStr) == 1 ||
-		 sscanf(sdpLine, " configuration = %[^; \t\r\n]", valueStr) == 1) {
-	// Note: We used "sdpLine" here, because the value may be case-sensitive (if it's Base-64).
-	delete[] fConfig; fConfig = strDup(valueStr);
-      } else if (sscanf(line, " mode = %[^; \t\r\n]", valueStr) == 1) {
-	delete[] fMode; fMode = strDup(valueStr);
-      } else if (sscanf(sdpLine, " sprop-parameter-sets = %[^; \t\r\n]", valueStr) == 1) {
-	// Note: We used "sdpLine" here, because the value is case-sensitive.
-	delete[] fSpropParameterSets; fSpropParameterSets = strDup(valueStr);
-      } else if (sscanf(line, " emphasis = %[^; \t\r\n]", valueStr) == 1) {
-	delete[] fEmphasis; fEmphasis = strDup(valueStr);
-      } else if (sscanf(sdpLine, " channel-order = %[^; \t\r\n]", valueStr) == 1) {
-	// Note: We used "sdpLine" here, because the value is case-sensitive.
-	delete[] fChannelOrder; fChannelOrder = strDup(valueStr);
-      } else if (sscanf(line, " width = %u", &u) == 1) {
-	// A non-standard parameter, but one that's often used:
-	fVideoWidth = u;
-      } else if (sscanf(line, " height = %u", &u) == 1) {
-	// A non-standard parameter, but one that's often used:
-	fVideoHeight = u;
-      } else {
-	// Some of the above parameters are Boolean.  Check whether the parameter
-	// names appear alone, without a "= 1" at the end:
-	if (sscanf(line, " %[^; \t\r\n]", valueStr) == 1) {
-	  if (strcmp(valueStr, "octet-align") == 0) {
-	    fOctetalign = 1;
-	  } else if (strcmp(valueStr, "cpresent") == 0) {
-            fCpresent = True;
-	  } else if (strcmp(valueStr, "crc") == 0) {
-	    fCRC = 1;
-	  } else if (strcmp(valueStr, "robust-sorting") == 0) {
-	    fRobustsorting = 1;
-	  } else if (strcmp(valueStr, "randomaccessindication") == 0) {
-	    fRandomaccessindication = True;
-	  }
+    unsigned const sdpLineLen = strlen(sdpLine);
+    char* nameStr = new char[sdpLineLen+1];
+    char* valueStr = new char[sdpLineLen+1];
+
+    while (*sdpLine != '\0' && *sdpLine != '\r' && *sdpLine != '\n') {
+      int sscanfResult = sscanf(sdpLine, " %[^=; \t\r\n] = %[^; \t\r\n]", nameStr, valueStr);
+      if (sscanfResult >= 1) {
+	// <name> or <name>=<value>
+	// Convert <name> to lower-case, to ease comparison:
+	Locale l("POSIX");
+	for (char* c = nameStr; *c != '\0'; ++c) *c = tolower(*c);
+	
+	if (sscanfResult == 1) {
+	  // <name>
+	  setAttribute(nameStr);
+	} else {
+	  // <name>=<value>
+	  setAttribute(nameStr, valueStr);
 	}
       }
-      delete[] valueStr;
 
       // Move to the next parameter assignment string:
-      while (*line != '\0' && *line != '\r' && *line != '\n'
-	     && *line != ';') ++line;
-      while (*line == ';') ++line;
-
-      // Do the same with sdpLine; needed for finding case sensitive values:
-      while (*sdpLine != '\0' && *sdpLine != '\r' && *sdpLine != '\n'
-	     && *sdpLine != ';') ++sdpLine;
+      while (*sdpLine != '\0' && *sdpLine != '\r' && *sdpLine != '\n' && *sdpLine != ';') ++sdpLine;
       while (*sdpLine == ';') ++sdpLine;
     }
-    delete[] lineCopy;
+    delete[] nameStr; delete[] valueStr;
     return True;
   } while (0);
 
@@ -1184,15 +1208,19 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 	fReadSource =
 	  AMRAudioRTPSource::createNew(env(), fRTPSocket, fRTPSource,
 				       fRTPPayloadFormat, False /*isWideband*/,
-				       fNumChannels, fOctetalign != 0, fInterleaving,
-				       fRobustsorting != 0, fCRC != 0);
+				       fNumChannels, attrVal_bool("octet-align"),
+				       attrVal_unsigned("interleaving"),
+				       attrVal_bool("robust-sorting"),
+				       attrVal_bool("crc"));
 	// Note that fReadSource will differ from fRTPSource in this case
       } else if (strcmp(fCodecName, "AMR-WB") == 0) { // AMR audio (wideband)
 	fReadSource =
 	  AMRAudioRTPSource::createNew(env(), fRTPSocket, fRTPSource,
 				       fRTPPayloadFormat, True /*isWideband*/,
-				       fNumChannels, fOctetalign != 0, fInterleaving,
-				       fRobustsorting != 0, fCRC != 0);
+				       fNumChannels, attrVal_bool("octet-align"),
+				       attrVal_unsigned("interleaving"),
+				       attrVal_bool("robust-sorting"),
+				       attrVal_bool("crc"));
 	// Note that fReadSource will differ from fRTPSource in this case
       } else if (strcmp(fCodecName, "MPA") == 0) { // MPEG-1 or 2 audio
 	fReadSource = fRTPSource
@@ -1236,9 +1264,17 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 	  = VorbisAudioRTPSource::createNew(env(), fRTPSocket,
 					    fRTPPayloadFormat,
 					    fRTPTimestampFrequency);
+      } else if (strcmp(fCodecName, "THEORA") == 0) { // Theora video
+	fReadSource = fRTPSource
+	  = TheoraVideoRTPSource::createNew(env(), fRTPSocket, fRTPPayloadFormat);
       } else if (strcmp(fCodecName, "VP8") == 0) { // VP8 video
 	fReadSource = fRTPSource
 	  = VP8VideoRTPSource::createNew(env(), fRTPSocket,
+					 fRTPPayloadFormat,
+					 fRTPTimestampFrequency);
+      } else if (strcmp(fCodecName, "VP9") == 0) { // VP9 video
+	fReadSource = fRTPSource
+	  = VP9VideoRTPSource::createNew(env(), fRTPSocket,
 					 fRTPPayloadFormat,
 					 fRTPTimestampFrequency);
       } else if (strcmp(fCodecName, "AC3") == 0 || strcmp(fCodecName, "EAC3") == 0) { // AC3 audio
@@ -1256,9 +1292,10 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 	  = MPEG4GenericRTPSource::createNew(env(), fRTPSocket,
 					     fRTPPayloadFormat,
 					     fRTPTimestampFrequency,
-					     fMediumName, fMode,
-					     fSizelength, fIndexlength,
-					     fIndexdeltalength);
+					     fMediumName, attrVal_strToLower("mode"),
+					     attrVal_unsigned("sizelength"),
+					     attrVal_unsigned("indexlength"),
+					     attrVal_unsigned("indexdeltalength"));
       } else if (strcmp(fCodecName, "MPV") == 0) { // MPEG-1 or 2 video
 	fReadSource = fRTPSource
 	  = MPEG1or2VideoRTPSource::createNew(env(), fRTPSocket,
@@ -1285,6 +1322,13 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 	fReadSource = fRTPSource
 	  = H264VideoRTPSource::createNew(env(), fRTPSocket,
 					  fRTPPayloadFormat,
+					  fRTPTimestampFrequency);
+      } else if (strcmp(fCodecName, "H265") == 0) {
+	Boolean expectDONFields = attrVal_unsigned("sprop-depack-buf-nalus") > 0;
+	fReadSource = fRTPSource
+	  = H265VideoRTPSource::createNew(env(), fRTPSocket,
+					  fRTPPayloadFormat,
+					  expectDONFields,
 					  fRTPTimestampFrequency);
       } else if (strcmp(fCodecName, "DV") == 0) {
 	fReadSource = fRTPSource
@@ -1330,6 +1374,7 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
 		   || strcmp(fCodecName, "L16") == 0 // 16-bit linear audio
 		   || strcmp(fCodecName, "L20") == 0 // 20-bit linear audio (RFC 3190)
 		   || strcmp(fCodecName, "L24") == 0 // 24-bit linear audio (RFC 3190)
+		   || strcmp(fCodecName, "G722") == 0 // G.722 audio (RFC 3551)
 		   || strcmp(fCodecName, "G726-16") == 0 // G.726, 16 kbps
 		   || strcmp(fCodecName, "G726-24") == 0 // G.726, 24 kbps
 		   || strcmp(fCodecName, "G726-32") == 0 // G.726, 32 kbps
@@ -1373,4 +1418,33 @@ Boolean MediaSubsession::createSourceObjects(int useSpecialRTPoffset) {
   } while (0);
 
   return False; // an error occurred
+}
+
+
+////////// SDPAttribute implementation //////////
+
+SDPAttribute::SDPAttribute(char const* strValue, Boolean valueIsHexadecimal)
+  : fStrValue(strDup(strValue)), fStrValueToLower(NULL), fValueIsHexadecimal(valueIsHexadecimal) {
+  if (fStrValue == NULL) {
+    // No value was given for this attribute, so consider it to be a Boolean, with value True:
+    fIntValue = 1;
+  } else {
+    // Create a 'tolower' version of "fStrValue", in case it's needed:
+    Locale l("POSIX");
+    size_t strSize;
+
+    fStrValueToLower = strDupSize(fStrValue, strSize);
+    for (unsigned i = 0; i < strSize-1; ++i) fStrValueToLower[i] = tolower(fStrValue[i]);
+    fStrValueToLower[strSize-1] = '\0';
+    
+    // Try to parse "fStrValueToLower" as an integer.  If we can't, assume an integer value of 0:
+    if (sscanf(fStrValueToLower, valueIsHexadecimal ? "%x" : "%d", &fIntValue) != 1) {
+      fIntValue = 0;
+    }
+  }
+}
+
+SDPAttribute::~SDPAttribute() {
+  delete[] fStrValue;
+  delete[] fStrValueToLower;
 }

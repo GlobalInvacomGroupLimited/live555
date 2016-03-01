@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // RTP sink for H.264 video (RFC 3984)
 // C++ header
 
@@ -34,11 +34,13 @@ public:
 	    u_int8_t const* sps, unsigned spsSize, u_int8_t const* pps, unsigned ppsSize);
     // an optional variant of "createNew()", useful if we know, in advance,
     // the stream's SPS and PPS NAL units.
+    // This avoids us having to 'pre-read' from the input source in order to get these values.
   static H264VideoRTPSink*
   createNew(UsageEnvironment& env, Groupsock* RTPgs, unsigned char rtpPayloadFormat,
 	    char const* sPropParameterSetsStr);
     // an optional variant of "createNew()", useful if we know, in advance,
     // the stream's SPS and PPS NAL units.
+    // This avoids us having to 'pre-read' from the input source in order to get these values.
 
 protected:
   H264VideoRTPSink(UsageEnvironment& env, Groupsock* RTPgs, unsigned char rtpPayloadFormat,

@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // A simplified version of "H264or5VideoStreamFramer" that takes only complete,
 // discrete frames (rather than an arbitrary byte stream) as input.
 // This avoids the parsing and data copying overhead of the full
@@ -49,9 +49,6 @@ void H264or5VideoStreamDiscreteFramer
   source->afterGettingFrame1(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
 }
 
-#define VPS_MAX_SIZE 1000 // larger than the largest possible VPS (Video Parameter Set) NAL unit
-#define SPS_MAX_SIZE 1000 // larger than the largest possible SPS (Sequence Parameter Set) NAL unit
-
 void H264or5VideoStreamDiscreteFramer
 ::afterGettingFrame1(unsigned frameSize, unsigned numTruncatedBytes,
                      struct timeval presentationTime,
@@ -76,43 +73,13 @@ void H264or5VideoStreamDiscreteFramer
     envir() << "H264or5VideoStreamDiscreteFramer error: MPEG 'start code' seen in the input\n";
   } else if (isVPS(nal_unit_type)) { // Video parameter set (VPS)
     saveCopyOfVPS(fTo, frameSize);
-
-    // We also make another copy - without 'emulation bytes', to extract parameters that we need:
-    u_int8_t vps[VPS_MAX_SIZE];
-    unsigned vpsSize
-      = removeH264or5EmulationBytes(vps, VPS_MAX_SIZE, fLastSeenVPS, fLastSeenVPSSize);
-
-    // Extract the first 12 'profile_tier_level' bytes:
-    if (vpsSize >= 6/*'profile_tier_level' offset*/+12/*num 'profile_tier_level' bytes*/) {
-      memmove(fProfileTierLevelHeaderBytes, &vps[6], 12);
-    }
   } else if (isSPS(nal_unit_type)) { // Sequence parameter set (SPS)
     saveCopyOfSPS(fTo, frameSize);
-
-    // We also make another copy - without 'emulation bytes', to extract parameters that we need:
-    u_int8_t sps[SPS_MAX_SIZE];
-    unsigned spsSize
-      = removeH264or5EmulationBytes(sps, SPS_MAX_SIZE, fLastSeenSPS, fLastSeenSPSSize);
-    if (fHNumber == 264) {
-      // Extract the first 3 bytes of the SPS (after the nal_unit_header byte) as profile_level_id
-      if (spsSize >= 1/*'profile_level_id' offset within SPS*/ + 3/*num bytes needed*/) {
-	fProfileLevelId = (sps[1]<<16) | (sps[2]<<8) | sps[3];
-      }
-    } else { // 265
-      // Extract the first 12 'profile_tier_level' bytes:
-      if (spsSize >= 3/*'profile_tier_level' offset*/+12/*num 'profile_tier_level' bytes*/) {
-	memmove(fProfileTierLevelHeaderBytes, &sps[3], 12);
-      }
-    }
   } else if (isPPS(nal_unit_type)) { // Picture parameter set (PPS)
     saveCopyOfPPS(fTo, frameSize);
   }
 
-  // Next, check whether this NAL unit ends the current 'access unit' (basically, a video frame).
-  //  Unfortunately, we can't do this reliably, because we don't yet know anything about the
-  // *next* NAL unit that we'll see.  So, we guess this as best as we can, by assuming that
-  // if this NAL unit is a VCL NAL unit, then it ends the current 'access unit'.
-  if (isVCL(nal_unit_type)) fPictureEndMarker = True;
+  fPictureEndMarker = nalUnitEndsAccessUnit(nal_unit_type);
 
   // Finally, complete delivery to the client:
   fFrameSize = frameSize;
@@ -120,4 +87,16 @@ void H264or5VideoStreamDiscreteFramer
   fPresentationTime = presentationTime;
   fDurationInMicroseconds = durationInMicroseconds;
   afterGetting(this);
+}
+
+Boolean H264or5VideoStreamDiscreteFramer::nalUnitEndsAccessUnit(u_int8_t nal_unit_type) {
+  // Check whether this NAL unit ends the current 'access unit' (basically, a video frame).
+  //  Unfortunately, we can't do this reliably, because we don't yet know anything about the
+  // *next* NAL unit that we'll see.  So, we guess this as best as we can, by assuming that
+  // if this NAL unit is a VCL NAL unit, then it ends the current 'access unit'.
+  //
+  // This will be wrong if you are streaming multiple 'slices' per picture.  In that case,
+  // you can define a subclass that reimplements this virtual function to do the right thing.
+
+  return isVCL(nal_unit_type);
 }

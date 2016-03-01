@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // RTP sink for H.264 video (RFC 3984)
 // Implementation
 
@@ -97,8 +97,18 @@ char const* H264VideoRTPSink::auxSDPLine() {
   }
 
   // Set up the "a=fmtp:" SDP line for this stream:
+  u_int8_t* spsWEB = new u_int8_t[spsSize]; // "WEB" means "Without Emulation Bytes"
+  unsigned spsWEBSize = removeH264or5EmulationBytes(spsWEB, spsSize, sps, spsSize);
+  if (spsWEBSize < 4) { // Bad SPS size => assume our source isn't ready
+    delete[] spsWEB;
+    return NULL;
+  }
+  u_int32_t profileLevelId = (spsWEB[1]<<16) | (spsWEB[2]<<8) | spsWEB[3];
+  delete[] spsWEB;
+
   char* sps_base64 = base64Encode((char*)sps, spsSize);
   char* pps_base64 = base64Encode((char*)pps, ppsSize);
+
   char const* fmtpFmt =
     "a=fmtp:%d packetization-mode=1"
     ";profile-level-id=%06X"
@@ -110,8 +120,9 @@ char const* H264VideoRTPSink::auxSDPLine() {
   char* fmtp = new char[fmtpFmtSize];
   sprintf(fmtp, fmtpFmt,
           rtpPayloadType(),
-	  framerSource->profileLevelId(),
+	  profileLevelId,
           sps_base64, pps_base64);
+
   delete[] sps_base64;
   delete[] pps_base64;
 

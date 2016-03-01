@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // A WAV audio file source
 // Implementation
 
@@ -65,12 +65,14 @@ void WAVAudioFileSource::setScaleFactor(int scale) {
   }
 }
 
-void WAVAudioFileSource::seekToPCMByte(unsigned byteNumber, unsigned numBytesToStream) {
+void WAVAudioFileSource::seekToPCMByte(unsigned byteNumber) {
   byteNumber += fWAVHeaderSize;
   if (byteNumber > fFileSize) byteNumber = fFileSize;
 
   SeekFile64(fFid, byteNumber, SEEK_SET);
+}
 
+void WAVAudioFileSource::limitNumBytesToStream(unsigned numBytesToStream) {
   fNumBytesToStream = numBytesToStream;
   fLimitNumBytesToStream = fNumBytesToStream > 0;
 }
@@ -124,10 +126,12 @@ WAVAudioFileSource::WAVAudioFileSource(UsageEnvironment& env, FILE* fid)
     // Skip over any chunk that's not a FORMAT ('fmt ') chunk:
     u_int32_t tmp;
     if (!get4Bytes(fid, tmp)) break;
-    if (tmp != 0x20746d66/*'fmt ', little-endian*/) {
+    while (tmp != 0x20746d66/*'fmt ', little-endian*/) {
       // Skip this chunk:
+      u_int32_t chunkLength;
+      if (!get4Bytes(fid, chunkLength)) break;
+      if (!skipBytes(fid, chunkLength)) break;
       if (!get4Bytes(fid, tmp)) break;
-      if (!skipBytes(fid, tmp)) break;
     }
 
     // FORMAT Chunk (the 4-byte header code has already been parsed):
@@ -173,6 +177,15 @@ WAVAudioFileSource::WAVAudioFileSource(UsageEnvironment& env, FILE* fid)
       unsigned factLength;
       if (!get4Bytes(fid, factLength)) break;
       if (!skipBytes(fid, factLength)) break;
+      c = nextc;
+    }
+
+    // EYRE chunk (optional):
+    if (c == 'e') {
+      if (nextc != 'y' || nextc != 'r' || nextc != 'e') break;
+      unsigned eyreLength;
+      if (!get4Bytes(fid, eyreLength)) break;
+      if (!skipBytes(fid, eyreLength)) break;
       c = nextc;
     }
 
@@ -222,7 +235,7 @@ WAVAudioFileSource::~WAVAudioFileSource() {
 
 void WAVAudioFileSource::doGetNextFrame() {
   if (feof(fFid) || ferror(fFid) || (fLimitNumBytesToStream && fNumBytesToStream == 0)) {
-    handleClosure(this);
+    handleClosure();
     return;
   }
 
@@ -240,6 +253,7 @@ void WAVAudioFileSource::doGetNextFrame() {
 }
 
 void WAVAudioFileSource::doStopGettingFrames() {
+  envir().taskScheduler().unscheduleDelayedTask(nextTask());
 #ifndef READ_FROM_FILES_SYNCHRONOUSLY
   envir().taskScheduler().turnOffBackgroundReadHandling(fileno(fFid));
   fHaveStartedReading = False;
@@ -280,7 +294,7 @@ void WAVAudioFileSource::doReadFromFile() {
     }
 #endif
     if (numBytesRead == 0) {
-     handleClosure(this);
+     handleClosure();
       return;
     }
     fFrameSize += numBytesRead;

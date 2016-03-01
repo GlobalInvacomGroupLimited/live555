@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "mTunnel" multicast access service
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // Helper routines to implement 'group sockets'
 // Implementation
 
@@ -28,6 +28,11 @@ extern "C" int initializeWinsockIfNecessary();
 #include <time.h>
 #include <fcntl.h>
 #define initializeWinsockIfNecessary() 1
+#endif
+#if defined(__WIN32__) || defined(_WIN32) || defined(_QNX4)
+#else
+#include <signal.h>
+#define USE_SIGNALS 1
 #endif
 #include <stdio.h>
 
@@ -181,17 +186,29 @@ Boolean makeSocketNonBlocking(int sock) {
 #endif
 }
 
-Boolean makeSocketBlocking(int sock) {
+Boolean makeSocketBlocking(int sock, unsigned writeTimeoutInMilliseconds) {
+  Boolean result;
 #if defined(__WIN32__) || defined(_WIN32)
   unsigned long arg = 0;
-  return ioctlsocket(sock, FIONBIO, &arg) == 0;
+  result = ioctlsocket(sock, FIONBIO, &arg) == 0;
 #elif defined(VXWORKS)
   int arg = 0;
-  return ioctl(sock, FIONBIO, (int)&arg) == 0;
+  result = ioctl(sock, FIONBIO, (int)&arg) == 0;
 #else
   int curFlags = fcntl(sock, F_GETFL, 0);
-  return fcntl(sock, F_SETFL, curFlags&(~O_NONBLOCK)) >= 0;
+  result = fcntl(sock, F_SETFL, curFlags&(~O_NONBLOCK)) >= 0;
 #endif
+
+  if (writeTimeoutInMilliseconds > 0) {
+#ifdef SO_SNDTIMEO
+    struct timeval tv;
+    tv.tv_sec = writeTimeoutInMilliseconds/1000;
+    tv.tv_usec = (writeTimeoutInMilliseconds%1000)*1000;
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (char *)&tv, sizeof tv);
+#endif
+  }
+
+  return result;
 }
 
 int setupStreamSocket(UsageEnvironment& env,
@@ -301,39 +318,54 @@ int readSocket(UsageEnvironment& env,
 }
 
 Boolean writeSocket(UsageEnvironment& env,
-		    int socket, struct in_addr address, Port port,
+		    int socket, struct in_addr address, portNumBits portNum,
 		    u_int8_t ttlArg,
 		    unsigned char* buffer, unsigned bufferSize) {
-	do {
-		if (ttlArg != 0) {
-			// Before sending, set the socket's TTL:
+  // Before sending, set the socket's TTL:
 #if defined(__WIN32__) || defined(_WIN32)
 #define TTL_TYPE int
 #else
 #define TTL_TYPE u_int8_t
 #endif
-			TTL_TYPE ttl = (TTL_TYPE)ttlArg;
-			if (setsockopt(socket, IPPROTO_IP, IP_MULTICAST_TTL,
-				       (const char*)&ttl, sizeof ttl) < 0) {
-				socketErr(env, "setsockopt(IP_MULTICAST_TTL) error: ");
-				break;
-			}
-		}
+  TTL_TYPE ttl = (TTL_TYPE)ttlArg;
+  if (setsockopt(socket, IPPROTO_IP, IP_MULTICAST_TTL,
+		 (const char*)&ttl, sizeof ttl) < 0) {
+    socketErr(env, "setsockopt(IP_MULTICAST_TTL) error: ");
+    return False;
+  }
 
-		MAKE_SOCKADDR_IN(dest, address.s_addr, port.num());
-		int bytesSent = sendto(socket, (char*)buffer, bufferSize, 0,
-			               (struct sockaddr*)&dest, sizeof dest);
-		if (bytesSent != (int)bufferSize) {
-			char tmpBuf[100];
-			sprintf(tmpBuf, "writeSocket(%d), sendTo() error: wrote %d bytes instead of %u: ", socket, bytesSent, bufferSize);
-			socketErr(env, tmpBuf);
-			break;
-		}
+  return writeSocket(env, socket, address, portNum, buffer, bufferSize);
+}
 
-		return True;
-	} while (0);
+Boolean writeSocket(UsageEnvironment& env,
+		    int socket, struct in_addr address, portNumBits portNum,
+		    unsigned char* buffer, unsigned bufferSize) {
+  do {
+    MAKE_SOCKADDR_IN(dest, address.s_addr, portNum);
+    int bytesSent = sendto(socket, (char*)buffer, bufferSize, 0,
+			   (struct sockaddr*)&dest, sizeof dest);
+    if (bytesSent != (int)bufferSize) {
+      char tmpBuf[100];
+      sprintf(tmpBuf, "writeSocket(%d), sendTo() error: wrote %d bytes instead of %u: ", socket, bytesSent, bufferSize);
+      socketErr(env, tmpBuf);
+      break;
+    }
+    
+    return True;
+  } while (0);
 
-	return False;
+  return False;
+}
+
+void ignoreSigPipeOnSocket(int socketNum) {
+  #ifdef USE_SIGNALS
+  #ifdef SO_NOSIGPIPE
+  int set_option = 1;
+  setsockopt(socketNum, SOL_SOCKET, SO_NOSIGPIPE, &set_option, sizeof set_option);
+  #else
+  signal(SIGPIPE, SIG_IGN);
+  #endif
+  #endif
 }
 
 static unsigned getBufferSize(UsageEnvironment& env, int bufOptName,
@@ -595,7 +627,7 @@ netAddressBits ourIPAddress(UsageEnvironment& env) {
       unsigned char testString[] = "hostIdTest";
       unsigned testStringLength = sizeof testString;
 
-      if (!writeSocket(env, sock, testAddr, testPort, 0,
+      if (!writeSocket(env, sock, testAddr, testPort.num(), 0,
 		       testString, testStringLength)) break;
 
       // Block until the socket is readable (with a 5-second timeout):
@@ -696,7 +728,9 @@ char const* timestampString() {
 
 #if !defined(_WIN32_WCE)
   static char timeString[9]; // holds hh:mm:ss plus trailing '\0'
-  char const* ctimeResult = ctime((time_t*)&tvNow.tv_sec);
+
+  time_t tvNow_t = tvNow.tv_sec;
+  char const* ctimeResult = ctime(&tvNow_t);
   if (ctimeResult == NULL) {
     sprintf(timeString, "??:??:??");
   } else {

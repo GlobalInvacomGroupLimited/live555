@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // Common routines used by both RTSP clients and servers
 // Implementation
 
@@ -24,12 +24,6 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #include <stdio.h>
 #include <ctype.h> // for "isxdigit()
 #include <time.h> // for "strftime()" and "gmtime()"
-
-#if defined(__WIN32__) || defined(_WIN32) || defined(_QNX4)
-#else
-#include <signal.h>
-#define USE_SIGNALS 1
-#endif
 
 static void decodeURL(char* url) {
   // Replace (in place) any %<hex><hex> sequences with the appropriate 8-bit character.
@@ -214,35 +208,42 @@ Boolean parseRTSPRequestString(char const* reqStr,
   return True;
 }
 
-Boolean parseRangeParam(char const* paramStr, double& rangeStart, double& rangeEnd, char*& absStartTime, char*& absEndTime) {
+Boolean parseRangeParam(char const* paramStr,
+			double& rangeStart, double& rangeEnd,
+			char*& absStartTime, char*& absEndTime,
+			Boolean& startTimeIsNow) {
   delete[] absStartTime; delete[] absEndTime;
   absStartTime = absEndTime = NULL; // by default, unless "paramStr" is a "clock=..." string
+  startTimeIsNow = False; // by default
   double start, end;
-  int numCharsMatched = 0;
+  int numCharsMatched1 = 0, numCharsMatched2 = 0, numCharsMatched3 = 0, numCharsMatched4 = 0;
   Locale l("C", Numeric);
   if (sscanf(paramStr, "npt = %lf - %lf", &start, &end) == 2) {
     rangeStart = start;
     rangeEnd = end;
-  } else if (sscanf(paramStr, "npt = %lf -", &start) == 1) {
-    if (start < 0.0) {
-      // special case for "npt = -<endtime>", which seems to match here:
-      rangeStart = 0.0;
+  } else if (sscanf(paramStr, "npt = %n%lf -", &numCharsMatched1, &start) == 1) {
+    if (paramStr[numCharsMatched1] == '-') {
+      // special case for "npt = -<endtime>", which matches here:
+      rangeStart = 0.0; startTimeIsNow = True;
       rangeEnd = -start;
     } else {
       rangeStart = start;
       rangeEnd = 0.0;
     }
-  } else if (strcmp(paramStr, "npt=now-") == 0) {
-    rangeStart = 0.0;
+  } else if (sscanf(paramStr, "npt = now - %lf", &end) == 1) {
+      rangeStart = 0.0; startTimeIsNow = True;
+      rangeEnd = end;
+  } else if (sscanf(paramStr, "npt = now -%n", &numCharsMatched2) == 0 && numCharsMatched2 > 0) {
+    rangeStart = 0.0; startTimeIsNow = True;
     rangeEnd = 0.0;
-  } else if (sscanf(paramStr, "clock = %n", &numCharsMatched) == 0 && numCharsMatched > 0) {
+  } else if (sscanf(paramStr, "clock = %n", &numCharsMatched3) == 0 && numCharsMatched3 > 0) {
     rangeStart = rangeEnd = 0.0;
 
-    char const* utcTimes = &paramStr[numCharsMatched];
+    char const* utcTimes = &paramStr[numCharsMatched3];
     size_t len = strlen(utcTimes) + 1;
     char* as = new char[len];
     char* ae = new char[len];
-    int sscanfResult = sscanf(utcTimes, "%[^-]-%s", as, ae);
+    int sscanfResult = sscanf(utcTimes, "%[^-]-%[^\r\n]", as, ae);
     if (sscanfResult == 2) {
       absStartTime = as;
       absEndTime = ae;
@@ -253,7 +254,7 @@ Boolean parseRangeParam(char const* paramStr, double& rangeStart, double& rangeE
       delete[] as; delete[] ae;
       return False;
     }
-  } else if (sscanf(paramStr, "smtpe = %n", &numCharsMatched) == 0 && numCharsMatched > 0) {
+  } else if (sscanf(paramStr, "smtpe = %n", &numCharsMatched4) == 0 && numCharsMatched4 > 0) {
     // We accept "smtpe=" parameters, but currently do not interpret them.
   } else {
     return False; // The header is malformed
@@ -262,7 +263,10 @@ Boolean parseRangeParam(char const* paramStr, double& rangeStart, double& rangeE
   return True;
 }
 
-Boolean parseRangeHeader(char const* buf, double& rangeStart, double& rangeEnd, char*& absStartTime, char*& absEndTime) {
+Boolean parseRangeHeader(char const* buf,
+			 double& rangeStart, double& rangeEnd,
+			 char*& absStartTime, char*& absEndTime,
+			 Boolean& startTimeIsNow) {
   // First, find "Range:"
   while (1) {
     if (*buf == '\0') return False; // not found
@@ -270,10 +274,9 @@ Boolean parseRangeHeader(char const* buf, double& rangeStart, double& rangeEnd, 
     ++buf;
   }
 
-  // Then, run through each of the fields, looking for ones we handle:
   char const* fields = buf + 7;
   while (*fields == ' ') ++fields;
-  return parseRangeParam(fields, rangeStart, rangeEnd, absStartTime, absEndTime);
+  return parseRangeParam(fields, rangeStart, rangeEnd, absStartTime, absEndTime, startTimeIsNow);
 }
 
 Boolean parseScaleHeader(char const* buf, float& scale) {
@@ -287,7 +290,6 @@ Boolean parseScaleHeader(char const* buf, float& scale) {
     ++buf;
   }
 
-  // Then, run through each of the fields, looking for ones we handle:
   char const* fields = buf + 6;
   while (*fields == ' ') ++fields;
   float sc;
@@ -358,15 +360,4 @@ char const* dateHeader() {
   wcstombs(buf, inBuf, wcslen(inBuf));
 #endif
   return buf;
-}
-
-void ignoreSigPipeOnSocket(int socketNum) {
-#ifdef USE_SIGNALS
-#ifdef SO_NOSIGPIPE
-  int set_option = 1;
-  setsockopt(socketNum, SOL_SOCKET, SO_NOSIGPIPE, &set_option, sizeof set_option);
-#else
-  signal(SIGPIPE, SIG_IGN);
-#endif
-#endif
 }

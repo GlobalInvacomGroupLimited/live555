@@ -14,7 +14,7 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 **********/
 // "liveMedia"
-// Copyright (c) 1996-2014 Live Networks, Inc.  All rights reserved.
+// Copyright (c) 1996-2016 Live Networks, Inc.  All rights reserved.
 // A filter that breaks up a H.264 or H.265 Video Elementary Stream into NAL units.
 // Implementation
 
@@ -53,7 +53,9 @@ private:
   void analyze_seq_parameter_set_data(unsigned& num_units_in_tick, unsigned& time_scale);
   void profile_tier_level(BitVector& bv, unsigned max_sub_layers_minus1);
   void analyze_vui_parameters(BitVector& bv, unsigned& num_units_in_tick, unsigned& time_scale);
+  void analyze_hrd_parameters(BitVector& bv);
   void analyze_sei_data(u_int8_t nal_unit_type);
+  void analyze_sei_payload(unsigned payloadType, unsigned payloadSize, u_int8_t* payload);
 
 private:
   int fHNumber; // 264 or 265
@@ -61,6 +63,10 @@ private:
   Boolean fHaveSeenFirstStartCode, fHaveSeenFirstByteOfNALUnit;
   u_int8_t fFirstByteOfNALUnit;
   double fParsedFrameRate;
+  // variables set & used in the specification:
+  unsigned cpb_removal_delay_length_minus1, dpb_output_delay_length_minus1;
+  Boolean CpbDpbDelaysPresentFlag, pic_struct_present_flag;
+  double DeltaTfiDivisor;
 };
 
 
@@ -73,10 +79,7 @@ H264or5VideoStreamFramer
     fHNumber(hNumber),
     fLastSeenVPS(NULL), fLastSeenVPSSize(0),
     fLastSeenSPS(NULL), fLastSeenSPSSize(0),
-    fLastSeenPPS(NULL), fLastSeenPPSSize(0),
-    fProfileLevelId(0) {
-  for (unsigned i = 0; i < 12; ++i) fProfileTierLevelHeaderBytes[i] = 0;
-
+    fLastSeenPPS(NULL), fLastSeenPPSSize(0) {
   fParser = createParser
     ? new H264or5VideoStreamParser(hNumber, this, inputSource, includeStartCodeInOutput)
     : NULL;
@@ -90,6 +93,8 @@ H264or5VideoStreamFramer::~H264or5VideoStreamFramer() {
   delete[] fLastSeenVPS;
 }
 
+#define VPS_MAX_SIZE 1000 // larger than the largest possible VPS (Video Parameter Set) NAL unit
+
 void H264or5VideoStreamFramer::saveCopyOfVPS(u_int8_t* from, unsigned size) {
   if (from == NULL) return;
   delete[] fLastSeenVPS;
@@ -98,6 +103,8 @@ void H264or5VideoStreamFramer::saveCopyOfVPS(u_int8_t* from, unsigned size) {
 
   fLastSeenVPSSize = size;
 }
+
+#define SPS_MAX_SIZE 1000 // larger than the largest possible SPS (Sequence Parameter Set) NAL unit
 
 void H264or5VideoStreamFramer::saveCopyOfSPS(u_int8_t* from, unsigned size) {
   if (from == NULL) return;
@@ -143,7 +150,10 @@ H264or5VideoStreamParser
 ::H264or5VideoStreamParser(int hNumber, H264or5VideoStreamFramer* usingSource,
 			   FramedSource* inputSource, Boolean includeStartCodeInOutput)
   : MPEGVideoStreamParser(usingSource, inputSource),
-    fHNumber(hNumber), fOutputStartCodeSize(includeStartCodeInOutput ? 4 : 0), fHaveSeenFirstStartCode(False), fHaveSeenFirstByteOfNALUnit(False), fParsedFrameRate(0.0) {
+    fHNumber(hNumber), fOutputStartCodeSize(includeStartCodeInOutput ? 4 : 0), fHaveSeenFirstStartCode(False), fHaveSeenFirstByteOfNALUnit(False), fParsedFrameRate(0.0),
+    cpb_removal_delay_length_minus1(23), dpb_output_delay_length_minus1(23),
+    CpbDpbDelaysPresentFlag(0), pic_struct_present_flag(0),
+    DeltaTfiDivisor(2.0) {
 }
 
 H264or5VideoStreamParser::~H264or5VideoStreamParser() {
@@ -174,7 +184,7 @@ Boolean H264or5VideoStreamParser::usuallyBeginsAccessUnit(u_int8_t nal_unit_type
 
 void H264or5VideoStreamParser
 ::removeEmulationBytes(u_int8_t* nalUnitCopy, unsigned maxSize, unsigned& nalUnitCopySize) {
-  u_int8_t* nalUnitOrig = fStartOfFrame + fOutputStartCodeSize;
+  u_int8_t const* nalUnitOrig = fStartOfFrame + fOutputStartCodeSize;
   unsigned const numBytesInNALunit = fTo - nalUnitOrig;
   nalUnitCopySize
     = removeH264or5EmulationBytes(nalUnitCopy, maxSize, nalUnitOrig, numBytesInNALunit);
@@ -302,10 +312,9 @@ public:
 #endif
 
 void H264or5VideoStreamParser::profile_tier_level(BitVector& bv, unsigned max_sub_layers_minus1) {
-  // Get and save the first 96 bits (== 12 bytes) of this, in case the downstream object wants it:
-  unsigned i;
-  for (i = 0; i < 12; ++i) usingSource()->fProfileTierLevelHeaderBytes[i] = bv.getBits(8);
+  bv.skipBits(96);
 
+  unsigned i;
   Boolean sub_layer_profile_present_flag[7], sub_layer_level_present_flag[7];
   for (i = 0; i < max_sub_layers_minus1; ++i) {
     sub_layer_profile_present_flag[i] = bv.get1BitBoolean();
@@ -360,7 +369,10 @@ void H264or5VideoStreamParser
     (void)bv.get_expGolomb(); // chroma_sample_loc_type_bottom_field
   }
   if (fHNumber == 265) {
-    bv.skipBits(3); // neutral_chroma_indication_flag, field_seq_flag, frame_field_info_present_flag
+    bv.skipBits(2); // neutral_chroma_indication_flag, field_seq_flag
+    Boolean frame_field_info_present_flag = bv.get1BitBoolean();
+    DEBUG_PRINT(frame_field_info_present_flag);
+    pic_struct_present_flag = frame_field_info_present_flag; // hack to make H.265 like H.264
     Boolean default_display_window_flag = bv.get1BitBoolean();
     DEBUG_PRINT(default_display_window_flag);
     if (default_display_window_flag) {
@@ -388,11 +400,51 @@ void H264or5VideoStreamParser
 	unsigned vui_num_ticks_poc_diff_one_minus1 = bv.get_expGolomb();
 	DEBUG_PRINT(vui_num_ticks_poc_diff_one_minus1);
       }
+      return; // For H.265, don't bother parsing any more of this #####
     }
   }
+  // The following is H.264 only: #####
+  Boolean nal_hrd_parameters_present_flag = bv.get1BitBoolean();
+  DEBUG_PRINT(nal_hrd_parameters_present_flag);
+  if (nal_hrd_parameters_present_flag) analyze_hrd_parameters(bv);
+  Boolean vcl_hrd_parameters_present_flag = bv.get1BitBoolean();
+  DEBUG_PRINT(vcl_hrd_parameters_present_flag);
+  if (vcl_hrd_parameters_present_flag) analyze_hrd_parameters(bv);
+  CpbDpbDelaysPresentFlag = nal_hrd_parameters_present_flag || vcl_hrd_parameters_present_flag;
+  if (CpbDpbDelaysPresentFlag) {
+    bv.skipBits(1); // low_delay_hrd_flag
+  }
+  pic_struct_present_flag = bv.get1BitBoolean();
+  DEBUG_PRINT(pic_struct_present_flag);
 }
 
-#define VPS_MAX_SIZE 1000 // larger than the largest possible VPS (Video Parameter Set) NAL unit
+void H264or5VideoStreamParser::analyze_hrd_parameters(BitVector& bv) {
+  DEBUG_TAB;
+  unsigned cpb_cnt_minus1 = bv.get_expGolomb();
+  DEBUG_PRINT(cpb_cnt_minus1);
+  unsigned bit_rate_scale = bv.getBits(4);
+  DEBUG_PRINT(bit_rate_scale);
+  unsigned cpb_size_scale = bv.getBits(4);
+  DEBUG_PRINT(cpb_size_scale);
+  for (unsigned SchedSelIdx = 0; SchedSelIdx <= cpb_cnt_minus1; ++SchedSelIdx) {
+    DEBUG_TAB;
+    DEBUG_PRINT(SchedSelIdx);
+    unsigned bit_rate_value_minus1 = bv.get_expGolomb();
+    DEBUG_PRINT(bit_rate_value_minus1);
+    unsigned cpb_size_value_minus1 = bv.get_expGolomb();
+    DEBUG_PRINT(cpb_size_value_minus1);
+    Boolean cbr_flag = bv.get1BitBoolean();
+    DEBUG_PRINT(cbr_flag);
+  }
+  unsigned initial_cpb_removal_delay_length_minus1 = bv.getBits(5);
+  DEBUG_PRINT(initial_cpb_removal_delay_length_minus1);
+  cpb_removal_delay_length_minus1 = bv.getBits(5);
+  DEBUG_PRINT(cpb_removal_delay_length_minus1);
+  dpb_output_delay_length_minus1 = bv.getBits(5);
+  DEBUG_PRINT(dpb_output_delay_length_minus1);
+  unsigned time_offset_length = bv.getBits(5);
+  DEBUG_PRINT(time_offset_length);
+}
 
 void H264or5VideoStreamParser
 ::analyze_video_parameter_set_data(unsigned& num_units_in_tick, unsigned& time_scale) {
@@ -447,8 +499,6 @@ void H264or5VideoStreamParser
   DEBUG_PRINT(vps_extension_flag);
 }
 
-#define SPS_MAX_SIZE 1000 // larger than the largest possible SPS (Sequence Parameter Set) NAL unit
-
 void H264or5VideoStreamParser
 ::analyze_seq_parameter_set_data(unsigned& num_units_in_tick, unsigned& time_scale) {
   num_units_in_tick = time_scale = 0; // default values
@@ -468,10 +518,6 @@ void H264or5VideoStreamParser
     DEBUG_PRINT(constraint_setN_flag);
     unsigned level_idc = bv.getBits(8);
     DEBUG_PRINT(level_idc);
-    // These three values make up the 'profile_level_id'.
-    // Save this, in case the downstream object wants to use it:
-    usingSource()->fProfileLevelId = (profile_idc<<16)|(constraint_setN_flag<<8)|level_idc;
-
     unsigned seq_parameter_set_id = bv.get_expGolomb();
     DEBUG_PRINT(seq_parameter_set_id);
     if (profile_idc == 100 || profile_idc == 110 || profile_idc == 122 || profile_idc == 244 || profile_idc == 44 || profile_idc == 83 || profile_idc == 86 || profile_idc == 118 || profile_idc == 128 ) {
@@ -653,12 +699,12 @@ void H264or5VideoStreamParser
     }
     unsigned num_short_term_ref_pic_sets = bv.get_expGolomb();
     DEBUG_PRINT(num_short_term_ref_pic_sets);
+    unsigned num_negative_pics = 0, prev_num_negative_pics = 0;
+    unsigned num_positive_pics = 0, prev_num_positive_pics = 0;
     for (i = 0; i < num_short_term_ref_pic_sets; ++i) {
       // short_term_ref_pic_set(i):
       DEBUG_TAB;
       DEBUG_PRINT(i);
-      unsigned num_negative_pics = 0;
-      unsigned num_positive_pics = 0;
       Boolean inter_ref_pic_set_prediction_flag = False;
       if (i != 0) {
 	inter_ref_pic_set_prediction_flag = bv.get1BitBoolean();
@@ -672,15 +718,18 @@ void H264or5VideoStreamParser
 	}
 	bv.skipBits(1); // delta_rps_sign
 	(void)bv.get_expGolomb(); // abs_delta_rps_minus1
-	for (unsigned j = 0; j < num_negative_pics+num_positive_pics; ++j) {
+	unsigned NumDeltaPocs = prev_num_negative_pics + prev_num_positive_pics; // correct???
+	for (unsigned j = 0; j < NumDeltaPocs; ++j) {
 	  DEBUG_PRINT(j);
 	  Boolean used_by_curr_pic_flag = bv.get1BitBoolean();
 	  DEBUG_PRINT(used_by_curr_pic_flag);
 	  if (!used_by_curr_pic_flag) bv.skipBits(1); // use_delta_flag[j]
 	}
       } else {
+	prev_num_negative_pics = num_negative_pics;
 	num_negative_pics = bv.get_expGolomb();
 	DEBUG_PRINT(num_negative_pics);
+	prev_num_positive_pics = num_positive_pics;
 	num_positive_pics = bv.get_expGolomb();
 	DEBUG_PRINT(num_positive_pics);
 	unsigned k;
@@ -827,7 +876,60 @@ void H264or5VideoStreamParser::analyze_sei_data(u_int8_t nal_unit_type) {
     }
     fprintf(stderr, "\tpayloadType %d (\"%s\"); payloadSize %d\n", payloadType, description, payloadSize);
 #endif
+
+    analyze_sei_payload(payloadType, payloadSize, &sei[j]);
     j += payloadSize;
+  }
+}
+
+void H264or5VideoStreamParser
+::analyze_sei_payload(unsigned payloadType, unsigned payloadSize, u_int8_t* payload) {
+  if (payloadType == 1/* pic_timing, for both H.264 and H.265 */) {
+    BitVector bv(payload, 0, 8*payloadSize);
+
+    DEBUG_TAB;
+    if (CpbDpbDelaysPresentFlag) {
+      unsigned cpb_removal_delay = bv.getBits(cpb_removal_delay_length_minus1 + 1);
+      DEBUG_PRINT(cpb_removal_delay);
+      unsigned dpb_output_delay = bv.getBits(dpb_output_delay_length_minus1 + 1);
+      DEBUG_PRINT(dpb_output_delay);
+    }
+    if (pic_struct_present_flag) {
+      unsigned pic_struct = bv.getBits(4);
+      DEBUG_PRINT(pic_struct);
+      // Use this to set "DeltaTfiDivisor" (which is used to compute the frame rate):
+      double prevDeltaTfiDivisor = DeltaTfiDivisor; 
+      if (fHNumber == 264) {
+	DeltaTfiDivisor =
+	  pic_struct == 0 ? 2.0 :
+	  pic_struct <= 2 ? 1.0 :
+	  pic_struct <= 4 ? 2.0 :
+	  pic_struct <= 6 ? 3.0 :
+	  pic_struct == 7 ? 4.0 :
+	  pic_struct == 8 ? 6.0 :
+	  2.0;
+      } else { // H.265
+	DeltaTfiDivisor =
+	  pic_struct == 0 ? 2.0 :
+	  pic_struct <= 2 ? 1.0 :
+	  pic_struct <= 4 ? 2.0 :
+	  pic_struct <= 6 ? 3.0 :
+	  pic_struct == 7 ? 2.0 :
+	  pic_struct == 8 ? 3.0 :
+	  pic_struct <= 12 ? 1.0 :
+	  2.0;
+      }
+      // If "DeltaTfiDivisor" has changed, and we've already computed the frame rate, then
+      // adjust it, based on the new value of "DeltaTfiDivisor":
+      if (DeltaTfiDivisor != prevDeltaTfiDivisor && fParsedFrameRate != 0.0) {
+	  usingSource()->fFrameRate = fParsedFrameRate
+	    = fParsedFrameRate*(prevDeltaTfiDivisor/DeltaTfiDivisor);
+#ifdef DEBUG
+	  fprintf(stderr, "Changed frame rate to %f fps\n", usingSource()->fFrameRate);
+#endif
+      }
+    }
+    // Ignore the rest of the payload (timestamps) for now... #####
   }
 }
 
@@ -943,7 +1045,7 @@ unsigned H264or5VideoStreamParser::parse() {
     // Now that we have found (& copied) a NAL unit, process it if it's of special interest to us:
     if (isVPS(nal_unit_type)) { // Video parameter set
       // First, save a copy of this NAL unit, in case the downstream object wants to see it:
-      usingSource()->saveCopyOfVPS(fStartOfFrame + fOutputStartCodeSize, fTo - fStartOfFrame - fOutputStartCodeSize);
+      usingSource()->saveCopyOfVPS(fStartOfFrame + fOutputStartCodeSize, curFrameSize() - fOutputStartCodeSize);
 
       if (fParsedFrameRate == 0.0) {
 	// We haven't yet parsed a frame rate from the stream.
@@ -951,19 +1053,20 @@ unsigned H264or5VideoStreamParser::parse() {
 	unsigned num_units_in_tick, time_scale;
 	analyze_video_parameter_set_data(num_units_in_tick, time_scale);
 	if (time_scale > 0 && num_units_in_tick > 0) {
-	  usingSource()->fFrameRate = fParsedFrameRate = time_scale/(2.0*num_units_in_tick);
+	  usingSource()->fFrameRate = fParsedFrameRate
+	    = time_scale/(DeltaTfiDivisor*num_units_in_tick);
 #ifdef DEBUG
 	  fprintf(stderr, "Set frame rate to %f fps\n", usingSource()->fFrameRate);
 #endif
 	} else {
 #ifdef DEBUG
-	  fprintf(stderr, "\tThis \"Picture Parameter Set\" NAL unit contained no frame rate information, so we use a default frame rate of %f fps\n", usingSource()->fFrameRate);
+	  fprintf(stderr, "\tThis \"Video Parameter Set\" NAL unit contained no frame rate information, so we use a default frame rate of %f fps\n", usingSource()->fFrameRate);
 #endif
 	}
       }
     } else if (isSPS(nal_unit_type)) { // Sequence parameter set
       // First, save a copy of this NAL unit, in case the downstream object wants to see it:
-      usingSource()->saveCopyOfSPS(fStartOfFrame + fOutputStartCodeSize, fTo - fStartOfFrame - fOutputStartCodeSize);
+      usingSource()->saveCopyOfSPS(fStartOfFrame + fOutputStartCodeSize, curFrameSize() - fOutputStartCodeSize);
 
       if (fParsedFrameRate == 0.0) {
 	// We haven't yet parsed a frame rate from the stream.
@@ -971,7 +1074,8 @@ unsigned H264or5VideoStreamParser::parse() {
 	unsigned num_units_in_tick, time_scale;
 	analyze_seq_parameter_set_data(num_units_in_tick, time_scale);
 	if (time_scale > 0 && num_units_in_tick > 0) {
-	  usingSource()->fFrameRate = fParsedFrameRate = time_scale/(2.0*num_units_in_tick);
+	  usingSource()->fFrameRate = fParsedFrameRate
+	    = time_scale/(DeltaTfiDivisor*num_units_in_tick);
 #ifdef DEBUG
 	  fprintf(stderr, "Set frame rate to %f fps\n", usingSource()->fFrameRate);
 #endif
@@ -983,7 +1087,7 @@ unsigned H264or5VideoStreamParser::parse() {
       }
     } else if (isPPS(nal_unit_type)) { // Picture parameter set
       // Save a copy of this NAL unit, in case the downstream object wants to see it:
-      usingSource()->saveCopyOfPPS(fStartOfFrame + fOutputStartCodeSize, fTo - fStartOfFrame - fOutputStartCodeSize);
+      usingSource()->saveCopyOfPPS(fStartOfFrame + fOutputStartCodeSize, curFrameSize() - fOutputStartCodeSize);
     } else if (isSEI(nal_unit_type)) { // Supplemental enhancement information (SEI)
       analyze_sei_data(nal_unit_type);
       // Later, perhaps adjust "fPresentationTime" if we saw a "pic_timing" SEI payload??? #####
@@ -1057,7 +1161,7 @@ unsigned H264or5VideoStreamParser::parse() {
 }
 
 unsigned removeH264or5EmulationBytes(u_int8_t* to, unsigned toMaxSize,
-                                     u_int8_t* from, unsigned fromSize) {
+                                     u_int8_t const* from, unsigned fromSize) {
   unsigned toSize = 0;
   unsigned i = 0;
   while (i < fromSize && toSize+1 < toMaxSize) {
